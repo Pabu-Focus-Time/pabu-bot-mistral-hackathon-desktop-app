@@ -37,6 +37,7 @@ export function useFocusDetection() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [screenshotInterval, setScreenshotInterval] = useState<number | null>(null);
   const [autoDetect, setAutoDetect] = useState(true);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -133,25 +134,38 @@ export function useFocusDetection() {
     if (isAnalyzing) return;
     
     setIsAnalyzing(true);
+    setPermissionError(null);
     try {
       const result = await captureAndAnalyze(API_BASE);
       
-      if (result) {
-        const focusState: FocusState = {
-          focus_state: result.focus_state as 'focused' | 'distracted' | 'unknown',
-          confidence: result.confidence,
-          reason: result.reason,
-          timestamp: new Date().toISOString(),
-          source: 'desktop',
-        };
-        
-        setDesktopFocus(focusState);
-        sendFocusUpdate(focusState);
-        
-        // If distracted, trigger robot reaction
-        if (focusState.focus_state === 'distracted') {
-          sendReaction('warning', 'Desktop detected distraction!');
+      if (!result) {
+        setIsAnalyzing(false);
+        return;
+      }
+
+      if ('error' in result) {
+        if (result.needsPermission) {
+          setPermissionError(result.error);
+        } else {
+          console.error('Screenshot error:', result.error);
         }
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const focusState: FocusState = {
+        focus_state: result.focus_state as 'focused' | 'distracted' | 'unknown',
+        confidence: result.confidence,
+        reason: result.reason,
+        timestamp: new Date().toISOString(),
+        source: 'desktop',
+      };
+      
+      setDesktopFocus(focusState);
+      sendFocusUpdate(focusState);
+      
+      if (focusState.focus_state === 'distracted') {
+        sendReaction('warning', 'Desktop detected distraction!');
       }
     } catch (error) {
       console.error('Screenshot analysis error:', error);
@@ -185,16 +199,27 @@ export function useFocusDetection() {
     };
   }, []);
 
+  const openSystemPreferences = useCallback(() => {
+    const api = (window as any).electronAPI;
+    if (api?.openSystemPreferences) {
+      api.openSystemPreferences();
+    } else {
+      window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    }
+  }, []);
+
   return {
     isConnected,
     desktopFocus,
     robotFocus,
     isAnalyzing,
     autoDetect,
+    permissionError,
     sendReaction,
     startAutoDetection,
     stopAutoDetection,
     connect,
     disconnect,
+    openSystemPreferences,
   };
 }

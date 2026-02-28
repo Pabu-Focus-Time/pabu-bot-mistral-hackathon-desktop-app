@@ -137,6 +137,35 @@ const styles = {
     textAlign: 'center' as const,
     marginTop: '16px',
   },
+  permissionBanner: {
+    background: '#fff3cd',
+    border: '1px solid #ffc107',
+    borderRadius: '12px',
+    padding: '16px',
+    marginBottom: '24px',
+    textAlign: 'center' as const,
+  },
+  permissionTitle: {
+    fontSize: '15px',
+    fontWeight: 600,
+    color: '#856404',
+    marginBottom: '8px',
+  },
+  permissionText: {
+    fontSize: '13px',
+    color: '#856404',
+    marginBottom: '12px',
+  },
+  permissionButton: {
+    background: '#ffc107',
+    color: '#856404',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '8px 16px',
+    fontSize: '13px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
 };
 
 function getFocusColor(state: string) {
@@ -162,8 +191,10 @@ const App: React.FC = () => {
     robotFocus,
     isAnalyzing,
     autoDetect,
+    permissionError,
     startAutoDetection,
     stopAutoDetection,
+    openSystemPreferences,
   } = useFocusDetection();
 
   const desktopColor = getFocusColor(desktopFocus.focus_state);
@@ -191,6 +222,22 @@ const App: React.FC = () => {
             {isConnected ? 'Connected' : 'Disconnected'}
           </div>
         </div>
+
+        {/* Permission Error Banner */}
+        {permissionError && (
+          <div style={styles.permissionBanner}>
+            <div style={styles.permissionTitle}>⚠️ Screen Recording Permission Required</div>
+            <div style={styles.permissionText}>
+              {permissionError}. Please grant access in System Settings.
+            </div>
+            <button 
+              style={styles.permissionButton}
+              onClick={openSystemPreferences}
+            >
+              Open System Settings
+            </button>
+          </div>
+        )}
 
         {/* Desktop Focus */}
         <div style={styles.focusCard}>
