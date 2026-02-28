@@ -1,0 +1,8 @@
+websockets
+httpx
+python-dotenv
+Pillow
+numpy
+pygame
+pyttsx3
+reachy-mini
