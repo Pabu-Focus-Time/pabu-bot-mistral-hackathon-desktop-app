@@ -259,7 +259,7 @@ const App: React.FC = () => {
             </div>
           </div>
           {desktopFocus.reason && (
-            <div style={styles.reason}>{desktopFocus.reason}</div>
+            <div style={styles.reason}>{typeof desktopFocus.reason === 'string' ? desktopFocus.reason : JSON.stringify(desktopFocus.reason)}</div>
           )}
         </div>
 
@@ -283,7 +283,7 @@ const App: React.FC = () => {
             </div>
           </div>
           {robotFocus.reason && (
-            <div style={styles.reason}>{robotFocus.reason}</div>
+            <div style={styles.reason}>{typeof robotFocus.reason === 'string' ? robotFocus.reason : JSON.stringify(robotFocus.reason)}</div>
           )}
         </div>
 

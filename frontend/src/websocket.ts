@@ -4,7 +4,7 @@ import { captureAndAnalyze } from './screenshot';
 export interface FocusState {
   focus_state: 'focused' | 'distracted' | 'unknown';
   confidence: number;
-  reason: string;
+  reason: string | Record<string, unknown>;
   timestamp?: string;
   source?: 'desktop' | 'robot';
 }
