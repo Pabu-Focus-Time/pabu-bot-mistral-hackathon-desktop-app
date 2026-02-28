@@ -1,0 +1,1 @@
+# pabu-bot-mistral-hackathon-desktop-app
