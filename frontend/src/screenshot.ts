@@ -5,18 +5,25 @@ export interface ScreenshotResult {
   timestamp: string;
 }
 
-export async function captureScreenshot(): Promise<ScreenshotResult | null> {
+export interface ScreenshotError {
+  error: string;
+  needsPermission: boolean;
+}
+
+export async function captureScreenshot(): Promise<ScreenshotResult | ScreenshotError | null> {
   try {
-    // Use the exposed API from preload
     const api = (window as any).electronAPI;
     if (api?.captureScreenshot) {
       const result = await api.captureScreenshot();
       if (result) return result;
+      if (result === null) {
+        return { error: 'Screen Recording permission denied', needsPermission: true };
+      }
     }
     return null;
   } catch (error) {
     console.error('Screenshot capture failed:', error);
-    return null;
+    return { error: String(error), needsPermission: false };
   }
 }
 
@@ -24,9 +31,14 @@ export async function captureAndAnalyze(apiBase: string): Promise<{
   focus_state: string;
   confidence: number;
   reason: string;
-} | null> {
+} | { error: string; needsPermission: boolean } | null> {
   const screenshot = await captureScreenshot();
+  
   if (!screenshot) return null;
+  
+  if ('error' in screenshot) {
+    return screenshot;
+  }
 
   try {
     const response = await fetch(`${apiBase}/api/analyze`, {
