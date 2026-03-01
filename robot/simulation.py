@@ -133,10 +133,51 @@ class MockMotors:
 class ReachyMotors:
     """Real Reachy Mini motors interface"""
     
+    @staticmethod
+    def _manual_create_head_pose(x=0, y=0, z=0, roll=0, pitch=0, yaw=0, mm=False, degrees=True):
+        """Fallback: build a 4x4 homogeneous matrix from roll/pitch/yaw.
+        Uses ZYX (yaw-pitch-roll) rotation convention."""
+        if degrees:
+            roll = math.radians(roll)
+            pitch = math.radians(pitch)
+            yaw = math.radians(yaw)
+        
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        
+        R = np.array([
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp,     cp * sr,                cp * cr               ],
+        ])
+        
+        scale = 0.001 if mm else 1.0
+        pose = np.eye(4)
+        pose[:3, :3] = R
+        pose[:3, 3] = [x * scale, y * scale, z * scale]
+        return pose
+    
     def __init__(self, reachy):
         self._reachy = reachy
-        from reachy_mini.utils import create_head_pose
-        self._create_head_pose = create_head_pose
+        
+        # Try multiple import paths for create_head_pose
+        self._create_head_pose = None
+        for import_path in [
+            ("reachy_mini.utils", "create_head_pose"),
+            ("reachy_mini", "create_head_pose"),
+        ]:
+            try:
+                mod = __import__(import_path[0], fromlist=[import_path[1]])
+                self._create_head_pose = getattr(mod, import_path[1])
+                logger.info(f"Imported create_head_pose from {import_path[0]}")
+                break
+            except (ImportError, AttributeError) as e:
+                logger.debug(f"create_head_pose not in {import_path[0]}: {e}")
+        
+        if self._create_head_pose is None:
+            logger.warning("create_head_pose not found in SDK, using manual numpy fallback")
+            self._create_head_pose = self._manual_create_head_pose
         
         # Enable motors so movements actually work on real hardware
         try:
@@ -344,18 +385,23 @@ def create_robot_interfaces(simulation: bool = None):
         return sim.camera, sim.motors, sim.speaker, sim
     else:
         logger.info("Connecting to Reachy (or simulation daemon)...")
+        
+        # Step 1: check SDK is importable
         try:
             from reachy_mini import ReachyMini
+        except ImportError:
+            logger.warning("reachy-mini SDK not installed, falling back to mock")
+            sim = Simulation()
+            return sim.camera, sim.motors, sim.speaker, sim
+        
+        # Step 2: connect and build interfaces (any error here is NOT a missing SDK)
+        try:
             reachy = ReachyMini()
             logger.info("Connected to Reachy!")
             sim = ReachySimulation(reachy)
             return sim.camera, sim.motors, sim.speaker, sim
-        except ImportError:
-            logger.warning("reachy-mini not installed, falling back to mock")
-            sim = Simulation()
-            return sim.camera, sim.motors, sim.speaker, sim
         except Exception as e:
-            logger.error(f"Failed to connect to Reachy: {e}")
+            logger.error(f"Failed to initialize Reachy: {e}", exc_info=True)
             logger.info("Falling back to mock interfaces")
             sim = Simulation()
             return sim.camera, sim.motors, sim.speaker, sim

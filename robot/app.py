@@ -49,15 +49,18 @@ class FocusTimeRobot:
         # Create reactions handler
         self.reaction_handler = reactions.ReactionsWithAudio(motors, speaker)
         
-        # Create focus detector
-        self.focus_det = focus_detector.create_focus_detector(
-            camera,
-            simulation=config.SIMULATION,
-            api_base=config.API_BASE
-        )
-        
-        # Set up focus callback to send to server
-        self.focus_det.set_focus_callback(self._on_focus_update)
+        # Create focus detector (disabled by default — desktop handles detection)
+        if config.FOCUS_DETECTOR_ENABLED:
+            self.focus_det = focus_detector.create_focus_detector(
+                camera,
+                simulation=config.SIMULATION,
+                api_base=config.API_BASE
+            )
+            self.focus_det.set_focus_callback(self._on_focus_update)
+            logger.info("Robot focus detector enabled")
+        else:
+            self.focus_det = None
+            logger.info("Robot focus detector disabled (desktop handles detection)")
         
         # Create voice agent (independent of robot simulation mode)
         self.voice = voice_agent.create_voice_agent(
@@ -178,7 +181,8 @@ class FocusTimeRobot:
             self._session_active = True
             self._task_context = payload
             logger.info(f"Session started: {payload.get('task_name', '?')}")
-            await self.focus_det.start()
+            if self.focus_det:
+                await self.focus_det.start()
             if self.voice and not self.voice.is_running:
                 self.voice.start()
         
@@ -186,7 +190,8 @@ class FocusTimeRobot:
             self._session_active = False
             self._task_context = None
             logger.info("Session stopped")
-            await self.focus_det.stop()
+            if self.focus_det:
+                await self.focus_det.stop()
             if self.voice and self.voice.is_running:
                 self.voice.stop()
         

@@ -19,6 +19,7 @@ ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_9801kjk2p0kkf5wsrq
 VOICE_AGENT_ENABLED = os.getenv("VOICE_AGENT_ENABLED", "false").lower() == "true"
 
 # Focus detection settings
+FOCUS_DETECTOR_ENABLED = os.getenv("FOCUS_DETECTOR_ENABLED", "false").lower() == "true"
 FRAME_INTERVAL = float(os.getenv("FRAME_INTERVAL", "3.0"))
 IMAGE_SIMILARITY_THRESHOLD = float(os.getenv("IMAGE_SIMILARITY_THRESHOLD", "0.95"))
 
