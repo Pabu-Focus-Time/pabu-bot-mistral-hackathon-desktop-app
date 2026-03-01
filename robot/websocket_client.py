@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 from datetime import datetime
@@ -135,7 +136,10 @@ class WebSocketClient:
                     logger.info(f"Received: {message.get('type')} from {message.get('source')}")
                     
                     if self.on_message:
-                        self.on_message(message)
+                        if inspect.iscoroutinefunction(self.on_message):
+                            await self.on_message(message)
+                        else:
+                            self.on_message(message)
                         
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid JSON: {raw_message}")

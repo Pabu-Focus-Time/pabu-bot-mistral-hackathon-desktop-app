@@ -1,20 +1,190 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useFocusDetection } from './websocket';
+import ConversationPanel from './Conversation';
+
+const styles = {
+  container: {
+    minHeight: '100vh',
+    background: 'linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    padding: '40px 20px',
+    color: '#1d1d1f',
+  },
+  card: {
+    background: 'rgba(255, 255, 255, 0.9)',
+    backdropFilter: 'blur(20px)',
+    borderRadius: '20px',
+    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04)',
+    padding: '32px',
+    maxWidth: '480px',
+    margin: '0 auto',
+  },
+  header: {
+    textAlign: 'center' as const,
+    marginBottom: '32px',
+  },
+  logo: {
+    fontSize: '48px',
+    marginBottom: '8px',
+  },
+  title: {
+    fontSize: '28px',
+    fontWeight: 600,
+    marginBottom: '4px',
+    letterSpacing: '-0.5px',
+  },
+  subtitle: {
+    fontSize: '15px',
+    color: '#86868b',
+    fontWeight: 400,
+  },
+  statusBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '6px 14px',
+    borderRadius: '20px',
+    fontSize: '13px',
+    fontWeight: 500,
+    marginTop: '16px',
+  },
+  focusCard: {
+    padding: '20px',
+    borderRadius: '16px',
+    marginBottom: '16px',
+    transition: 'all 0.3s ease',
+  },
+  focusTitle: {
+    fontSize: '13px',
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+    color: '#86868b',
+    marginBottom: '12px',
+  },
+  focusState: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  focusIcon: {
+    width: '48px',
+    height: '48px',
+    borderRadius: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '24px',
+  },
+  focusInfo: {
+    flex: 1,
+  },
+  focusLabel: {
+    fontSize: '20px',
+    fontWeight: 600,
+    textTransform: 'capitalize' as const,
+  },
+  confidence: {
+    fontSize: '13px',
+    color: '#86868b',
+    marginTop: '2px',
+  },
+  reason: {
+    fontSize: '13px',
+    color: '#86868b',
+    marginTop: '8px',
+    fontStyle: 'italic',
+  },
+  divider: {
+    height: '1px',
+    background: 'linear-gradient(90deg, transparent, #e5e5e5, transparent)',
+    margin: '24px 0',
+  },
+  button: {
+    width: '100%',
+    padding: '14px 24px',
+    borderRadius: '12px',
+    border: 'none',
+    fontSize: '15px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    marginTop: '8px',
+  },
+  stats: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '12px',
+    marginTop: '24px',
+  },
+  statItem: {
+    textAlign: 'center' as const,
+    padding: '16px',
+    background: '#f5f5f7',
+    borderRadius: '12px',
+  },
+  statValue: {
+    fontSize: '24px',
+    fontWeight: 700,
+  },
+  statLabel: {
+    fontSize: '12px',
+    color: '#86868b',
+    marginTop: '4px',
+  },
+  timestamp: {
+    fontSize: '11px',
+    color: '#a1a1a6',
+    textAlign: 'center' as const,
+    marginTop: '16px',
+  },
+};
+
+function getFocusColor(state: string) {
+  switch (state) {
+    case 'focused': return '#34C759';
+    case 'distracted': return '#FF3B30';
+    default: return '#8E8E93';
+  }
+}
+
+function formatReason(reason: unknown): string {
+  if (!reason) return '';
+  if (typeof reason === 'string') return reason;
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
+function getFocusIcon(state: string) {
+  switch (state) {
+    case 'focused': return '🎯';
+    case 'distracted': return '⚠️';
+    default: return '❓';
+  }
+}
 import { tokens } from './styles/tokens';
 import TaskList from './components/TaskList';
 import FocusSession from './components/FocusSession';
-import { Task, createTask, createTodoNode } from './types/tasks';
+import { Task, createTask, createTodoNode, getCompletedCount, getTotalCount } from './types/tasks';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Target, Clock, Zap, Brain, Activity, Wifi, WifiOff, AlertTriangle, Settings, X } from 'lucide-react';
+import { Target, Clock, Zap, Brain, Activity, Wifi, WifiOff, AlertTriangle, Settings, X, ArrowRight, BookOpen, Lightbulb, ExternalLink, Loader2, CheckCircle2 } from 'lucide-react';
 
 const App: React.FC = () => {
   const {
     isConnected,
     desktopFocus,
     robotFocus,
+    isAnalyzing,
+    autoDetect,
+    sendVoiceEvent,
     focusHistory,
     contentChangeInfo,
     showDistraction,
+    distractionResources,
+    isLoadingResources,
     permissionError,
     startAutoDetection,
     stopAutoDetection,
@@ -54,6 +224,27 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [activeTaskId]);
 
+  // Per-todo timer: increment elapsedSeconds on the current todo every second
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (activeTaskId && currentTodoId) {
+      interval = setInterval(() => {
+        setTasks(prev => prev.map(task => {
+          if (task.id !== activeTaskId) return task;
+          return {
+            ...task,
+            todos: task.todos.map(todo =>
+              todo.id === currentTodoId
+                ? { ...todo, elapsedSeconds: (todo.elapsedSeconds || 0) + 1 }
+                : todo
+            ),
+          };
+        }));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [activeTaskId, currentTodoId]);
+
   const handleGenerateTodos = async (taskName: string, taskDescription: string) => {
     const newTask = createTask(taskName, taskDescription);
 
@@ -70,28 +261,28 @@ const App: React.FC = () => {
       if (response.ok) {
         const data = await response.json();
         const todos = data.todos || [];
-        newTask.todos = todos.map((t: { title: string; description: string }) =>
-          createTodoNode(t.title, t.description)
+        newTask.todos = todos.map((t: { title: string; description: string; estimated_minutes?: number }) =>
+          createTodoNode(t.title, t.description, t.estimated_minutes)
         );
       } else {
         // Fallback if API fails
         newTask.todos = [
-          createTodoNode('Research', 'Research the topic and gather resources'),
-          createTodoNode('Plan', 'Create a plan outline'),
-          createTodoNode('Implement', 'Implement the core functionality'),
-          createTodoNode('Test', 'Test and verify the implementation'),
-          createTodoNode('Refine', 'Refine and polish the result'),
+          createTodoNode('Research', 'Research the topic and gather resources', 20),
+          createTodoNode('Plan', 'Create a plan outline', 15),
+          createTodoNode('Implement', 'Implement the core functionality', 45),
+          createTodoNode('Test', 'Test and verify the implementation', 20),
+          createTodoNode('Refine', 'Refine and polish the result', 15),
         ];
       }
     } catch (err) {
       console.error('Failed to generate todos from API:', err);
       // Fallback if server unreachable
       newTask.todos = [
-        createTodoNode('Research', 'Research the topic and gather resources'),
-        createTodoNode('Plan', 'Create a plan outline'),
-        createTodoNode('Implement', 'Implement the core functionality'),
-        createTodoNode('Test', 'Test and verify the implementation'),
-        createTodoNode('Refine', 'Refine and polish the result'),
+        createTodoNode('Research', 'Research the topic and gather resources', 20),
+        createTodoNode('Plan', 'Create a plan outline', 15),
+        createTodoNode('Implement', 'Implement the core functionality', 45),
+        createTodoNode('Test', 'Test and verify the implementation', 20),
+        createTodoNode('Refine', 'Refine and polish the result', 15),
       ];
     }
 
@@ -120,6 +311,34 @@ const App: React.FC = () => {
         };
       });
 
+      // Auto-advance: if the toggled todo was the current one and it's now completed, move to next pending
+      if (taskId === activeTaskId && todoId === currentTodoId) {
+        const activeTask = updated.find(t => t.id === taskId);
+        if (activeTask) {
+          const toggledTodo = activeTask.todos.find(t => t.id === todoId);
+          if (toggledTodo?.status === 'completed') {
+            const nextPending = activeTask.todos.find(t => t.status !== 'completed' && t.id !== todoId);
+            if (nextPending) {
+              setCurrentTodoId(nextPending.id);
+              // Mark startedAt on the new current todo
+              const withStarted = updated.map(t => {
+                if (t.id !== taskId) return t;
+                return {
+                  ...t,
+                  todos: t.todos.map(td =>
+                    td.id === nextPending.id
+                      ? { ...td, startedAt: Date.now(), elapsedSeconds: td.elapsedSeconds || 0 }
+                      : td
+                  ),
+                };
+              });
+              setTaskContext(activeTask, nextPending.title);
+              return withStarted;
+            }
+          }
+        }
+      }
+
       // Re-sync task context if this is the active task
       if (taskId === activeTaskId) {
         const activeTask = updated.find(t => t.id === taskId);
@@ -140,7 +359,26 @@ const App: React.FC = () => {
     setSessionDuration(0);
     const task = tasks.find(t => t.id === taskId);
     if (task) {
-      setTaskContext(task);
+      // Auto-set current todo to the first pending todo
+      const firstPending = task.todos.find(t => t.status !== 'completed');
+      if (firstPending) {
+        setCurrentTodoId(firstPending.id);
+        // Mark startedAt on the first pending todo
+        setTasks(prev => prev.map(t => {
+          if (t.id !== taskId) return t;
+          return {
+            ...t,
+            todos: t.todos.map(todo =>
+              todo.id === firstPending.id
+                ? { ...todo, startedAt: Date.now(), elapsedSeconds: 0 }
+                : todo
+            ),
+          };
+        }));
+        setTaskContext(task, firstPending.title);
+      } else {
+        setTaskContext(task);
+      }
     }
     startAutoDetection();
   };
@@ -155,6 +393,19 @@ const App: React.FC = () => {
 
   const handleNodeClick = (taskId: string, nodeId: string) => {
     if (taskId === activeTaskId) {
+      // Mark startedAt on the newly selected todo (elapsed keeps accumulating)
+      setTasks(prev => prev.map(task => {
+        if (task.id !== taskId) return task;
+        return {
+          ...task,
+          todos: task.todos.map(todo =>
+            todo.id === nodeId
+              ? { ...todo, startedAt: todo.startedAt || Date.now() }
+              : todo
+          ),
+        };
+      }));
+
       setCurrentTodoId(nodeId);
       // Update task context with the newly selected todo
       const task = tasks.find(t => t.id === taskId);
@@ -168,6 +419,14 @@ const App: React.FC = () => {
   const activeTask = tasks.find(t => t.id === activeTaskId);
   const totalTasks = tasks.length;
 
+  // Current todo info for the active session
+  const currentTodo = activeTask && currentTodoId
+    ? activeTask.todos.find(t => t.id === currentTodoId)
+    : null;
+  const currentTodoElapsed = currentTodo?.elapsedSeconds || 0;
+  const currentTodoEstimate = currentTodo?.estimatedMinutes || 0;
+  const isBehindSchedule = currentTodoEstimate > 0 && currentTodoElapsed > currentTodoEstimate * 60;
+
   const formatDuration = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -176,7 +435,12 @@ const App: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const focusScore = Math.round(desktopFocus.confidence * 100);
+  // Focus score: high = good. Invert when distracted.
+  const focusScore = desktopFocus.focus_state === 'distracted'
+    ? Math.round((1 - desktopFocus.confidence) * 100)
+    : desktopFocus.focus_state === 'focused'
+    ? Math.round(desktopFocus.confidence * 100)
+    : Math.round(desktopFocus.confidence * 50);
 
   return (
     <div style={{
@@ -236,6 +500,9 @@ const App: React.FC = () => {
               AI-powered focus
             </div>
           </div>
+          {desktopFocus.reason && (
+            <div style={styles.reason}>{formatReason(desktopFocus.reason)}</div>
+          )}
         </div>
 
         {/* Sidebar Nav Items */}
@@ -289,6 +556,9 @@ const App: React.FC = () => {
                 {activeTask?.name || 'No task'}
               </div>
             </div>
+          </div>
+          {robotFocus.reason && (
+            <div style={styles.reason}>{formatReason(robotFocus.reason)}</div>
           )}
         </nav>
 
@@ -391,7 +661,10 @@ const App: React.FC = () => {
               focusHistory={focusHistory}
               contentChangeInfo={contentChangeInfo}
               currentTaskName={activeTask?.name || null}
-              currentTodoName={currentTodoId ? 'Selected task' : null}
+              currentTodoName={currentTodo?.title || null}
+              currentTodoElapsed={currentTodoElapsed}
+              currentTodoEstimate={currentTodoEstimate}
+              isBehindSchedule={isBehindSchedule}
               sessionDuration={sessionDuration}
               windowData={null}
               activityData={null}
@@ -450,112 +723,348 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Distraction Toast Notification — App-level overlay */}
+      {/* Distraction Full-Screen Overlay */}
       <AnimatePresence>
         {showDistraction && activeTask && (
           <motion.div
-            initial={{ opacity: 0, x: 60, y: 0 }}
-            animate={{ opacity: 1, x: 0, y: 0 }}
-            exit={{ opacity: 0, x: 60 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
             style={{
               position: 'fixed',
-              top: '20px',
-              right: '20px',
+              inset: 0,
               zIndex: 9999,
-              maxWidth: '340px',
-              background: tokens.colors.surface,
-              borderRadius: tokens.radius.lg,
-              border: `1px solid rgba(240, 180, 41, 0.25)`,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2)',
-              overflow: 'hidden',
-            }}
-          >
-            {/* Warm accent bar */}
-            <div style={{
-              height: '2px',
-              background: `linear-gradient(90deg, ${tokens.colors.warning}, ${tokens.colors.danger})`,
-            }} />
-
-            <div style={{
-              padding: '14px 16px',
+              background: 'rgba(0, 0, 0, 0.7)',
+              backdropFilter: 'blur(8px)',
               display: 'flex',
-              alignItems: 'flex-start',
-              gap: '12px',
-            }}>
-              {/* Warning icon */}
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            onClick={dismissDistraction}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30, delay: 0.05 }}
+              onClick={(e: React.MouseEvent) => e.stopPropagation()}
+              style={{
+                width: '480px',
+                maxWidth: '90vw',
+                background: tokens.colors.surface,
+                borderRadius: tokens.radius.xl,
+                border: `1px solid ${tokens.colors.border}`,
+                boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 8px 24px rgba(0,0,0,0.3)',
+                overflow: 'hidden',
+              }}
+            >
+              {/* Top accent bar */}
               <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: tokens.radius.md,
-                background: tokens.colors.warningMuted,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}>
-                <AlertTriangle size={16} style={{ color: tokens.colors.warning }} />
-              </div>
+                height: '3px',
+                background: `linear-gradient(90deg, ${tokens.colors.warning}, ${tokens.colors.danger})`,
+              }} />
 
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ padding: '28px 28px 24px' }}>
+                {/* Header */}
                 <div style={{
-                  fontSize: tokens.typography.fontSize.sm,
-                  fontWeight: tokens.typography.fontWeight.semibold,
-                  color: tokens.colors.text,
-                  marginBottom: '3px',
-                }}>
-                  You seem distracted
-                </div>
-                <div style={{
-                  fontSize: tokens.typography.fontSize.xs,
-                  color: tokens.colors.textSecondary,
-                  lineHeight: tokens.typography.lineHeight.normal,
-                }}>
-                  Get back to <span style={{
-                    color: tokens.colors.accent,
-                    fontWeight: tokens.typography.fontWeight.medium,
-                  }}>
-                    {activeTask.name}
-                  </span>
-                </div>
-              </div>
-
-              {/* Dismiss button */}
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={dismissDistraction}
-                style={{
-                  width: '24px',
-                  height: '24px',
-                  borderRadius: tokens.radius.sm,
-                  background: 'transparent',
-                  border: 'none',
-                  color: tokens.colors.textTertiary,
-                  cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                  padding: 0,
-                }}
-              >
-                <X size={14} />
-              </motion.button>
-            </div>
+                  justifyContent: 'space-between',
+                  marginBottom: '20px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: tokens.radius.lg,
+                      background: tokens.colors.warningMuted,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <AlertTriangle size={20} style={{ color: tokens.colors.warning }} />
+                    </div>
+                    <div>
+                      <div style={{
+                        fontSize: tokens.typography.fontSize.lg,
+                        fontWeight: tokens.typography.fontWeight.semibold,
+                        color: tokens.colors.text,
+                        lineHeight: 1.2,
+                      }}>
+                        You're distracted
+                      </div>
+                      <div style={{
+                        fontSize: tokens.typography.fontSize.sm,
+                        color: tokens.colors.textSecondary,
+                        marginTop: '2px',
+                      }}>
+                        Get back to <span style={{
+                          color: tokens.colors.accent,
+                          fontWeight: tokens.typography.fontWeight.medium,
+                        }}>{activeTask.name}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <motion.button
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
+                    onClick={dismissDistraction}
+                    style={{
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: tokens.radius.sm,
+                      background: 'transparent',
+                      border: 'none',
+                      color: tokens.colors.textTertiary,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                    }}
+                  >
+                    <X size={16} />
+                  </motion.button>
+                </div>
 
-            {/* Auto-dismiss progress bar */}
-            <motion.div
-              initial={{ scaleX: 1 }}
-              animate={{ scaleX: 0 }}
-              transition={{ duration: 5, ease: 'linear' }}
-              style={{
-                height: '2px',
-                background: tokens.colors.warning,
-                transformOrigin: 'left',
-                opacity: 0.4,
-              }}
-            />
+                {/* Progress Summary */}
+                <div style={{
+                  padding: '14px 16px',
+                  background: tokens.colors.backgroundSecondary,
+                  borderRadius: tokens.radius.md,
+                  border: `1px solid ${tokens.colors.border}`,
+                  marginBottom: '20px',
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '10px',
+                  }}>
+                    <span style={{
+                      fontSize: tokens.typography.fontSize.xs,
+                      color: tokens.colors.textTertiary,
+                      textTransform: 'uppercase',
+                      letterSpacing: tokens.typography.letterSpacing.wider,
+                    }}>
+                      Session Progress
+                    </span>
+                    <span style={{
+                      fontSize: tokens.typography.fontSize.xs,
+                      color: tokens.colors.textSecondary,
+                      fontFamily: tokens.typography.fontMono,
+                    }}>
+                      {getCompletedCount(activeTask.todos)}/{getTotalCount(activeTask.todos)} done
+                    </span>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div style={{
+                    height: '4px',
+                    background: tokens.colors.surfaceActive,
+                    borderRadius: tokens.radius.full,
+                    overflow: 'hidden',
+                    marginBottom: '12px',
+                  }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${getTotalCount(activeTask.todos) > 0
+                        ? (getCompletedCount(activeTask.todos) / getTotalCount(activeTask.todos)) * 100
+                        : 0}%`,
+                      background: tokens.colors.accent,
+                      borderRadius: tokens.radius.full,
+                      transition: tokens.transitions.normal,
+                    }} />
+                  </div>
+
+                  {/* Current todo info */}
+                  {currentTodo && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                    }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        flex: 1,
+                        minWidth: 0,
+                      }}>
+                        <ArrowRight size={12} style={{ color: tokens.colors.accent, flexShrink: 0 }} />
+                        <span style={{
+                          fontSize: tokens.typography.fontSize.sm,
+                          color: tokens.colors.text,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}>
+                          {currentTodo.title}
+                        </span>
+                      </div>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        flexShrink: 0,
+                      }}>
+                        <span style={{
+                          fontSize: tokens.typography.fontSize.xs,
+                          fontFamily: tokens.typography.fontMono,
+                          color: isBehindSchedule ? tokens.colors.danger : tokens.colors.textSecondary,
+                        }}>
+                          {formatDuration(currentTodoElapsed)}
+                          {currentTodoEstimate > 0 && `/${currentTodoEstimate}m`}
+                        </span>
+                        {isBehindSchedule && (
+                          <span style={{
+                            fontSize: '9px',
+                            fontWeight: tokens.typography.fontWeight.semibold,
+                            color: tokens.colors.danger,
+                            background: tokens.colors.dangerMuted,
+                            padding: '1px 5px',
+                            borderRadius: tokens.radius.full,
+                            textTransform: 'uppercase',
+                            letterSpacing: tokens.typography.letterSpacing.wide,
+                          }}>
+                            Behind
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* AI-Suggested Resources */}
+                <div style={{ marginBottom: '24px' }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    marginBottom: '10px',
+                  }}>
+                    <Lightbulb size={13} style={{ color: tokens.colors.warning }} />
+                    <span style={{
+                      fontSize: tokens.typography.fontSize.xs,
+                      color: tokens.colors.textTertiary,
+                      textTransform: 'uppercase',
+                      letterSpacing: tokens.typography.letterSpacing.wider,
+                    }}>
+                      Suggestions to refocus
+                    </span>
+                  </div>
+
+                  {isLoadingResources ? (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '12px 14px',
+                      background: tokens.colors.backgroundSecondary,
+                      borderRadius: tokens.radius.md,
+                      border: `1px solid ${tokens.colors.border}`,
+                    }}>
+                      <Loader2 size={14} style={{ color: tokens.colors.accent, animation: 'spin 1s linear infinite' }} />
+                      <span style={{
+                        fontSize: tokens.typography.fontSize.sm,
+                        color: tokens.colors.textSecondary,
+                      }}>
+                        Generating suggestions...
+                      </span>
+                    </div>
+                  ) : distractionResources.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {distractionResources.map((resource, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            padding: '10px 14px',
+                            background: tokens.colors.backgroundSecondary,
+                            borderRadius: tokens.radius.md,
+                            border: `1px solid ${tokens.colors.border}`,
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '10px',
+                          }}
+                        >
+                          <CheckCircle2 size={14} style={{
+                            color: tokens.colors.success,
+                            marginTop: '1px',
+                            flexShrink: 0,
+                          }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              fontSize: tokens.typography.fontSize.sm,
+                              fontWeight: tokens.typography.fontWeight.medium,
+                              color: tokens.colors.text,
+                              marginBottom: '2px',
+                            }}>
+                              {resource.title}
+                            </div>
+                            <div style={{
+                              fontSize: tokens.typography.fontSize.xs,
+                              color: tokens.colors.textSecondary,
+                              lineHeight: tokens.typography.lineHeight.normal,
+                            }}>
+                              {resource.action}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{
+                      padding: '12px 14px',
+                      background: tokens.colors.backgroundSecondary,
+                      borderRadius: tokens.radius.md,
+                      border: `1px solid ${tokens.colors.border}`,
+                      fontSize: tokens.typography.fontSize.sm,
+                      color: tokens.colors.textSecondary,
+                    }}>
+                      Take a deep breath and return to your current task.
+                    </div>
+                  )}
+                </div>
+
+                {/* Dismiss Button */}
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={dismissDistraction}
+                  style={{
+                    width: '100%',
+                    padding: '12px 20px',
+                    background: tokens.colors.accent,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: tokens.radius.md,
+                    fontSize: tokens.typography.fontSize.base,
+                    fontWeight: tokens.typography.fontWeight.semibold,
+                    cursor: 'pointer',
+                    fontFamily: tokens.typography.fontFamily,
+                    letterSpacing: tokens.typography.letterSpacing.tight,
+                  }}
+                >
+                  I'm back on track
+                </motion.button>
+              </div>
+
+              {/* Auto-dismiss progress bar */}
+              <motion.div
+                initial={{ scaleX: 1 }}
+                animate={{ scaleX: 0 }}
+                transition={{ duration: 30, ease: 'linear' }}
+                style={{
+                  height: '2px',
+                  background: tokens.colors.warning,
+                  transformOrigin: 'left',
+                  opacity: 0.5,
+                }}
+              />
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

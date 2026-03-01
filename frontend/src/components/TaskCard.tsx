@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronDown, ChevronRight, Play, Trash2, Check } from 'lucide-react';
+import { ChevronDown, ChevronRight, Play, Trash2, Check, Clock, AlertCircle } from 'lucide-react';
 import { tokens } from '../styles/tokens';
-import { Task, getCompletedCount, getTotalCount, flattenTodos } from '../types/tasks';
+import { Task, getCompletedCount, getTotalCount, getTotalEstimatedMinutes, flattenTodos } from '../types/tasks';
 
 interface TaskCardProps {
   task: Task;
@@ -30,6 +30,13 @@ const TaskCard: React.FC<TaskCardProps> = ({
   const totalCount = getTotalCount(task.todos);
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
   const allTodos = flattenTodos(task.todos);
+  const totalEstimated = getTotalEstimatedMinutes(task.todos);
+
+  const formatTodoTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   return (
     <motion.div
@@ -94,8 +101,17 @@ const TaskCard: React.FC<TaskCardProps> = ({
                   color: tokens.colors.textTertiary,
                   fontFamily: tokens.typography.fontMono,
                   flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
                 }}>
                   {completedCount}/{totalCount}
+                  {totalEstimated > 0 && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                      <Clock size={10} />
+                      ~{totalEstimated}m
+                    </span>
+                  )}
                 </span>
               )}
             </div>
@@ -239,12 +255,48 @@ const TaskCard: React.FC<TaskCardProps> = ({
                 {/* Todo content */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
-                    fontSize: tokens.typography.fontSize.md,
-                    color: isCompleted ? tokens.colors.textTertiary : tokens.colors.text,
-                    textDecoration: isCompleted ? 'line-through' : 'none',
-                    lineHeight: 1.4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
                   }}>
-                    {todo.title}
+                    <span style={{
+                      fontSize: tokens.typography.fontSize.md,
+                      color: isCompleted ? tokens.colors.textTertiary : tokens.colors.text,
+                      textDecoration: isCompleted ? 'line-through' : 'none',
+                      lineHeight: 1.4,
+                      flex: 1,
+                      minWidth: 0,
+                    }}>
+                      {todo.title}
+                    </span>
+                    {/* Time estimate / elapsed */}
+                    {todo.estimatedMinutes && !isCompleted && (
+                      <span style={{
+                        fontSize: tokens.typography.fontSize.xs,
+                        fontFamily: tokens.typography.fontMono,
+                        color: isCurrent && (todo.elapsedSeconds || 0) > todo.estimatedMinutes * 60
+                          ? tokens.colors.danger
+                          : tokens.colors.textTertiary,
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                      }}>
+                        {isCurrent && (todo.elapsedSeconds || 0) > 0 ? (
+                          <>
+                            {(todo.elapsedSeconds || 0) > todo.estimatedMinutes * 60 && (
+                              <AlertCircle size={10} style={{ color: tokens.colors.danger }} />
+                            )}
+                            {formatTodoTime(todo.elapsedSeconds || 0)}/{todo.estimatedMinutes}m
+                          </>
+                        ) : (
+                          <>
+                            <Clock size={10} />
+                            ~{todo.estimatedMinutes}m
+                          </>
+                        )}
+                      </span>
+                    )}
                   </div>
                   {todo.description && (
                     <div style={{
@@ -254,6 +306,25 @@ const TaskCard: React.FC<TaskCardProps> = ({
                       lineHeight: 1.4,
                     }}>
                       {todo.description}
+                    </div>
+                  )}
+                  {/* Behind schedule mini progress bar for current todo */}
+                  {isCurrent && todo.estimatedMinutes && (todo.elapsedSeconds || 0) > 0 && (
+                    <div style={{
+                      marginTop: '4px',
+                      height: '2px',
+                      background: tokens.colors.borderLight,
+                      borderRadius: '1px',
+                      overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        width: `${Math.min(100, ((todo.elapsedSeconds || 0) / (todo.estimatedMinutes * 60)) * 100)}%`,
+                        height: '100%',
+                        background: (todo.elapsedSeconds || 0) > todo.estimatedMinutes * 60
+                          ? tokens.colors.danger
+                          : tokens.colors.accent,
+                        transition: 'width 1s linear',
+                      }} />
                     </div>
                   )}
                 </div>

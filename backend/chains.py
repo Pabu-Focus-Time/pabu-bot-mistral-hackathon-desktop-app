@@ -55,6 +55,39 @@ Decision rules (in priority order):
 Respond with ONLY valid JSON: {{"focus_state": "focused|distracted|unknown", "confidence": 0.0-1.0, "reason": "brief explanation referencing the task"}}"""
 
 
+ROBOT_VISION_PROMPT = """You are analyzing a camera image from a small desk robot that is watching a person who should be working on their laptop.
+
+Your job is to determine whether the person is FOCUSED on their laptop work or DISTRACTED by something else.
+
+Signs of DISTRACTION (return "distracted"):
+- Holding or looking at a phone/smartphone
+- Scrolling on a phone or tablet
+- Looking away from the laptop screen for an extended period
+- Turned away from the desk entirely
+- Sleeping, dozing off, or head down on desk
+- Eating a meal (snacking briefly is OK)
+- Talking to someone else / on a phone call
+- Playing with objects, fidgeting extensively
+- Staring blankly / clearly daydreaming (eyes unfocused, not looking at screen)
+
+Signs of FOCUS (return "focused"):
+- Looking at the laptop screen
+- Typing on the keyboard
+- Reading something on screen (even if still)
+- Writing notes while referencing the screen
+- Briefly looking away to think (< a few seconds is normal)
+- Using a mouse/trackpad
+
+Signs of UNKNOWN (return "unknown"):
+- Person is not visible in frame
+- Image is too dark/blurry to determine
+- Cannot clearly see what the person is doing
+
+IMPORTANT: A person can be sitting at their desk but still be distracted if they are on their phone. Phone usage while at the desk is the #1 distraction signal.
+
+Respond ONLY with valid JSON: {"focus_state": "focused|distracted|unknown", "confidence": 0.0-1.0, "reason": "brief description of what you see the person doing"}"""
+
+
 def _build_vision_prompt(task_context: Optional[dict] = None) -> str:
     """Build the vision analysis prompt, optionally with task context."""
     base = "Analyze this screenshot and determine if the user is focused on their task or distracted."
@@ -224,7 +257,7 @@ class FocusChains:
                     temperature=0.3,
                     max_tokens=512,
                 )
-                logger.info("Vision LLM (Pixtral) ready")
+                logger.info("Vision LLM (Pixtral 12B) ready")
         except Exception as e:
             logger.warning(f"Vision LLM unavailable: {e}")
             self.vision_llm = None
@@ -372,6 +405,66 @@ class FocusChains:
             "focus_state": "unknown",
             "confidence": 0.0,
             "reason": "Failed to analyze screenshot",
+        }
+
+    async def analyze_robot_vision(self, image_b64: str) -> dict:
+        """
+        Analyze a robot camera image for physical distraction (phone usage,
+        looking away, not engaged with laptop, etc.).
+
+        Uses Pixtral Large with a prompt tailored for physical-world observation,
+        not screen content analysis.
+
+        Returns: {"focus_state": str, "confidence": float, "reason": str}
+        """
+        if not self.vision_llm:
+            return {
+                "focus_state": "unknown",
+                "confidence": 0.0,
+                "reason": "Vision LLM not available",
+            }
+
+        try:
+            image_url = f"data:image/jpeg;base64,{image_b64}"
+            message = HumanMessage(content=[
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": ROBOT_VISION_PROMPT},
+            ])
+
+            response = await self.vision_llm.ainvoke([message])
+            content = response.content
+
+            # Parse JSON from response
+            if isinstance(content, str):
+                result = json.loads(content)
+                return {
+                    "focus_state": result.get("focus_state", "unknown"),
+                    "confidence": result.get("confidence", 0.0),
+                    "reason": result.get("reason", ""),
+                }
+        except json.JSONDecodeError:
+            # Try to extract JSON from response
+            import re
+
+            if isinstance(content, str):
+                match = re.search(r"\{[\s\S]*?\}", content)
+                if match:
+                    try:
+                        result = json.loads(match.group(0))
+                        return {
+                            "focus_state": result.get("focus_state", "unknown"),
+                            "confidence": result.get("confidence", 0.0),
+                            "reason": result.get("reason", ""),
+                        }
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as e:
+            logger.error(f"Robot vision analysis error: {e}")
+
+        return {
+            "focus_state": "unknown",
+            "confidence": 0.0,
+            "reason": "Failed to analyze robot camera image",
         }
 
     @staticmethod

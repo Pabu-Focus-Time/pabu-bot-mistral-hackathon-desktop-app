@@ -42,21 +42,33 @@ class FocusDetector:
         self._on_focus_update = callback
     
     async def analyze_frame(self, frame: str) -> dict:
-        """Analyze a frame using Mistral API through backend"""
+        """
+        Analyze a camera frame via the robot-specific backend endpoint.
+
+        Sends the frame to /api/analyze-robot which uses DINOv3 pre-filtering
+        (robot channel) + Pixtral Large vision analysis to detect physical
+        distraction (phone usage, looking away, not engaged, etc.).
+        """
         client = await self._get_client()
         
         try:
             response = await client.post(
-                f"{self.api_base}/api/analyze",
+                f"{self.api_base}/api/analyze-robot",
                 json={"image": frame}
             )
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"Focus analysis: {result.get('focus_state')} (confidence: {result.get('confidence')})")
+                source = result.get("analysis_source", "?")
+                changed = result.get("content_changed", True)
+                logger.info(
+                    f"Robot analysis: {result.get('focus_state')} "
+                    f"(confidence: {result.get('confidence')}, "
+                    f"source: {source}, changed: {changed})"
+                )
                 return result
             else:
-                logger.error(f"Analysis API error: {response.status_code}")
+                logger.error(f"Robot analysis API error: {response.status_code}")
                 return {
                     "focus_state": "unknown",
                     "confidence": 0.0,
@@ -64,7 +76,7 @@ class FocusDetector:
                 }
                 
         except Exception as e:
-            logger.error(f"Analysis error: {e}")
+            logger.error(f"Robot analysis error: {e}")
             return {
                 "focus_state": "unknown",
                 "confidence": 0.0,

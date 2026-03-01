@@ -22,8 +22,8 @@ class MockCamera:
         self._frame_count += 1
         
         img_array = np.zeros((100, 100, 3), dtype=np.uint8)
-        color_cycle = (self._frame_count % 10) * 25
-        img_array[:, :] = [color_cycle, 150 - color_cycle, 100 + color_cycle]
+        c = (self._frame_count % 10) * 25
+        img_array[:, :] = [c % 256, (c * 3) % 256, (c * 7) % 256]
         
         from PIL import Image
         img = Image.fromarray(img_array)
