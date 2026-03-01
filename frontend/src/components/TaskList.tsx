@@ -14,6 +14,7 @@ interface TaskListProps {
   onStartSession: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
   onNodeClick: (taskId: string, nodeId: string) => void;
+  onToggleTodo: (taskId: string, todoId: string) => void;
 }
 
 const TaskList: React.FC<TaskListProps> = ({
@@ -24,43 +25,39 @@ const TaskList: React.FC<TaskListProps> = ({
   onStartSession,
   onDeleteTask,
   onNodeClick,
+  onToggleTodo,
 }) => {
   const handleGenerate = async (taskName: string, taskDescription: string) => {
     onGenerateTodos(taskName, taskDescription);
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacing.lg }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <TaskInput onGenerate={handleGenerate} />
 
       {tasks.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacing.md }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: `0 ${tokens.spacing.xs}`,
-            }}
-          >
-            <span
-              style={{
-                fontSize: tokens.typography.fontSize.sm,
-                fontWeight: tokens.typography.fontWeight.medium,
-                color: tokens.colors.textSecondary,
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}
-            >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 4px',
+          }}>
+            <span style={{
+              fontSize: tokens.typography.fontSize.xs,
+              fontWeight: tokens.typography.fontWeight.medium,
+              color: tokens.colors.textTertiary,
+              textTransform: 'uppercase',
+              letterSpacing: tokens.typography.letterSpacing.wider,
+            }}>
               Your Tasks
             </span>
-            <span
-              style={{
-                fontSize: tokens.typography.fontSize.xs,
-                color: tokens.colors.textTertiary,
-              }}
-            >
-              {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+            <span style={{
+              fontSize: tokens.typography.fontSize.xs,
+              color: tokens.colors.textTertiary,
+              fontFamily: tokens.typography.fontMono,
+            }}>
+              {tasks.length}
             </span>
           </div>
 
@@ -74,6 +71,7 @@ const TaskList: React.FC<TaskListProps> = ({
                 onStartSession={onStartSession}
                 onDeleteTask={onDeleteTask}
                 onNodeClick={onNodeClick}
+                onToggleTodo={onToggleTodo}
               />
             ))}
           </AnimatePresence>
@@ -83,41 +81,36 @@ const TaskList: React.FC<TaskListProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           style={{
-            padding: tokens.spacing.xxl,
+            padding: '48px 32px',
             textAlign: 'center',
           }}
         >
-          <div
-            style={{
-              width: '64px',
-              height: '64px',
-              margin: `0 auto ${tokens.spacing.lg}`,
-              borderRadius: tokens.radius.lg,
-              background: tokens.colors.surfaceSecondary,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Folder size={28} style={{ color: tokens.colors.textTertiary }} />
+          <div style={{
+            width: '48px',
+            height: '48px',
+            margin: '0 auto 16px',
+            borderRadius: tokens.radius.lg,
+            background: tokens.colors.surfaceSecondary,
+            border: `1px solid ${tokens.colors.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Folder size={20} style={{ color: tokens.colors.textTertiary }} />
           </div>
-          <div
-            style={{
-              fontSize: tokens.typography.fontSize.lg,
-              fontWeight: tokens.typography.fontWeight.medium,
-              color: tokens.colors.text,
-              marginBottom: tokens.spacing.xs,
-            }}
-          >
+          <div style={{
+            fontSize: tokens.typography.fontSize.base,
+            fontWeight: tokens.typography.fontWeight.medium,
+            color: tokens.colors.textSecondary,
+            marginBottom: '4px',
+          }}>
             No tasks yet
           </div>
-          <div
-            style={{
-              fontSize: tokens.typography.fontSize.sm,
-              color: tokens.colors.textSecondary,
-            }}
-          >
-            Create your first task to get started
+          <div style={{
+            fontSize: tokens.typography.fontSize.sm,
+            color: tokens.colors.textTertiary,
+          }}>
+            Create a task above to get started
           </div>
         </motion.div>
       )}

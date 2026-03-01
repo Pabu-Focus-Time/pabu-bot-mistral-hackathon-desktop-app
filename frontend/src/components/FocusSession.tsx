@@ -1,12 +1,15 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Play, Pause, Clock, Target, Monitor, Zap } from 'lucide-react';
+import { Play, Square, Clock, Target, Activity } from 'lucide-react';
 import { tokens, getFocusColor, getFocusBg } from '../styles/tokens';
-import { FocusState } from '../websocket';
+import { FocusState, FocusDataPoint } from '../websocket';
+import FocusGraph from './FocusGraph';
 
 interface FocusSessionProps {
   isActive: boolean;
   focusState: FocusState;
+  robotFocus: FocusState;
+  focusHistory: FocusDataPoint[];
   currentTaskName: string | null;
   currentTodoName: string | null;
   sessionDuration: number;
@@ -25,6 +28,8 @@ interface FocusSessionProps {
 const FocusSession: React.FC<FocusSessionProps> = ({
   isActive,
   focusState,
+  robotFocus,
+  focusHistory,
   currentTaskName,
   currentTodoName,
   sessionDuration,
@@ -34,285 +39,330 @@ const FocusSession: React.FC<FocusSessionProps> = ({
   onStop,
 }) => {
   const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
+    if (hrs > 0) return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const getFocusLabel = (state: string) => {
-    switch (state) {
-      case 'focused': return 'Focused';
-      case 'distracted': return 'Distracted';
-      default: return 'Unknown';
-    }
-  };
+  const focusScore = Math.round(focusState.confidence * 100);
+  const stateColor = getFocusColor(focusState.focus_state);
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      style={{
-        background: tokens.colors.surface,
-        borderRadius: tokens.radius.lg,
-        boxShadow: tokens.shadows.md,
-        border: `1px solid ${isActive ? tokens.colors.accent : tokens.colors.border}`,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          padding: tokens.spacing.lg,
-          borderBottom: `1px solid ${tokens.colors.border}`,
-          background: isActive ? getFocusBg(focusState.focus_state) : tokens.colors.surfaceSecondary,
-          transition: tokens.transitions.normal,
-        }}
+  // Not active state - compact start button
+  if (!isActive) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        style={{ marginBottom: '24px' }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacing.md }}>
-            <div
-              style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '50%',
-                background: isActive ? getFocusColor(focusState.focus_state) : tokens.colors.textTertiary,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Target size={24} color="white" />
-            </div>
-            <div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.xs,
-                  fontWeight: tokens.typography.fontWeight.medium,
-                  color: tokens.colors.textSecondary,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                Focus Session
-              </div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.lg,
-                  fontWeight: tokens.typography.fontWeight.semibold,
-                  color: tokens.colors.text,
-                }}
-              >
-                {isActive ? getFocusLabel(focusState.focus_state) : 'Not Active'}
-              </div>
-            </div>
+        <div style={{
+          background: tokens.colors.surface,
+          borderRadius: tokens.radius.xl,
+          border: `1px solid ${tokens.colors.border}`,
+          padding: '32px',
+          textAlign: 'center',
+        }}>
+          <div style={{
+            width: '56px',
+            height: '56px',
+            borderRadius: '50%',
+            background: tokens.colors.accentMuted,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 16px',
+          }}>
+            <Target size={24} style={{ color: tokens.colors.accent }} />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacing.md }}>
-            <div style={{ textAlign: 'right' }}>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.xxl,
-                  fontWeight: tokens.typography.fontWeight.bold,
-                  color: tokens.colors.text,
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatDuration(sessionDuration)}
-              </div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.xs,
-                  color: tokens.colors.textSecondary,
-                }}
-              >
-                Session Duration
-              </div>
-            </div>
+          <div style={{
+            fontSize: tokens.typography.fontSize.lg,
+            fontWeight: tokens.typography.fontWeight.semibold,
+            color: tokens.colors.text,
+            marginBottom: '6px',
+          }}>
+            Ready to focus?
           </div>
-        </div>
-      </div>
-
-      {isActive && (
-        <div style={{ padding: tokens.spacing.lg }}>
-          {currentTaskName && (
-            <div
-              style={{
-                padding: tokens.spacing.md,
-                background: tokens.colors.surfaceSecondary,
-                borderRadius: tokens.radius.md,
-                marginBottom: tokens.spacing.md,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.xs,
-                  fontWeight: tokens.typography.fontWeight.medium,
-                  color: tokens.colors.textSecondary,
-                  marginBottom: tokens.spacing.xs,
-                }}
-              >
-                CURRENT TASK
-              </div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.md,
-                  fontWeight: tokens.typography.fontWeight.medium,
-                  color: tokens.colors.text,
-                }}
-              >
-                {currentTaskName}
-              </div>
-              {currentTodoName && (
-                <div
-                  style={{
-                    fontSize: tokens.typography.fontSize.sm,
-                    color: tokens.colors.accent,
-                    marginTop: tokens.spacing.xs,
-                  }}
-                >
-                  → {currentTodoName}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacing.md }}>
-            <div
-              style={{
-                padding: tokens.spacing.md,
-                background: tokens.colors.surfaceSecondary,
-                borderRadius: tokens.radius.md,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacing.xs, marginBottom: tokens.spacing.xs }}>
-                <Monitor size={14} style={{ color: tokens.colors.textSecondary }} />
-                <span
-                  style={{
-                    fontSize: tokens.typography.fontSize.xs,
-                    fontWeight: tokens.typography.fontWeight.medium,
-                    color: tokens.colors.textSecondary,
-                  }}
-                >
-                  Active Window
-                </span>
-              </div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.sm,
-                  fontWeight: tokens.typography.fontWeight.medium,
-                  color: tokens.colors.text,
-                }}
-              >
-                {windowData?.appName || 'Unknown'}
-              </div>
-              {windowData?.windowTitle && (
-                <div
-                  style={{
-                    fontSize: tokens.typography.fontSize.xs,
-                    color: tokens.colors.textTertiary,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {windowData.windowTitle}
-                </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                padding: tokens.spacing.md,
-                background: tokens.colors.surfaceSecondary,
-                borderRadius: tokens.radius.md,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacing.xs, marginBottom: tokens.spacing.xs }}>
-                <Zap size={14} style={{ color: tokens.colors.textSecondary }} />
-                <span
-                  style={{
-                    fontSize: tokens.typography.fontSize.xs,
-                    fontWeight: tokens.typography.fontWeight.medium,
-                    color: tokens.colors.textSecondary,
-                  }}
-                >
-                  Activity
-                </span>
-              </div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.sm,
-                  fontWeight: tokens.typography.fontWeight.medium,
-                  color: tokens.colors.text,
-                }}
-              >
-                {activityData?.idleSeconds ? `${activityData.idleSeconds}s idle` : 'Active'}
-              </div>
-              <div
-                style={{
-                  fontSize: tokens.typography.fontSize.xs,
-                  color: tokens.colors.textTertiary,
-                }}
-              >
-                {activityData?.windowSwitchCount || 0} switches/min
-              </div>
-            </div>
+          <div style={{
+            fontSize: tokens.typography.fontSize.md,
+            color: tokens.colors.textSecondary,
+            marginBottom: '24px',
+          }}>
+            Start a session to track your focus in real-time
           </div>
 
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={onStop}
-            style={{
-              width: '100%',
-              marginTop: tokens.spacing.lg,
-              padding: tokens.spacing.md,
-              background: tokens.colors.danger,
-              color: tokens.colors.surface,
-              border: 'none',
-              borderRadius: tokens.radius.md,
-              fontSize: tokens.typography.fontSize.md,
-              fontWeight: tokens.typography.fontWeight.medium,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: tokens.spacing.sm,
-            }}
-          >
-            <Pause size={18} />
-            End Session
-          </motion.button>
-        </div>
-      )}
-
-      {!isActive && (
-        <div style={{ padding: tokens.spacing.lg }}>
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={onStart}
             style={{
-              width: '100%',
-              padding: tokens.spacing.md,
+              padding: '10px 32px',
               background: tokens.colors.accent,
-              color: tokens.colors.surface,
+              color: '#fff',
               border: 'none',
               borderRadius: tokens.radius.md,
-              fontSize: tokens.typography.fontSize.md,
+              fontSize: tokens.typography.fontSize.base,
               fontWeight: tokens.typography.fontWeight.medium,
               cursor: 'pointer',
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              gap: tokens.spacing.sm,
+              gap: '8px',
+              transition: tokens.transitions.normal,
+              fontFamily: tokens.typography.fontFamily,
             }}
           >
-            <Play size={18} />
+            <Play size={16} fill="currentColor" />
             Start Focus Session
           </motion.button>
         </div>
-      )}
+      </motion.div>
+    );
+  }
+
+  // Active session state
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      style={{ marginBottom: '24px' }}
+    >
+      <div style={{
+        background: tokens.colors.surface,
+        borderRadius: tokens.radius.xl,
+        border: `1px solid ${tokens.colors.border}`,
+        overflow: 'hidden',
+      }}>
+        {/* Session Header */}
+        <div style={{
+          padding: '20px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: `1px solid ${tokens.colors.border}`,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {/* Focus State Indicator */}
+            <div style={{ position: 'relative' }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '50%',
+                background: getFocusBg(focusState.focus_state),
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                border: `2px solid ${stateColor}`,
+              }}>
+                <Activity size={18} style={{ color: stateColor }} />
+              </div>
+              {/* Pulse dot */}
+              <div className="animate-pulse" style={{
+                position: 'absolute',
+                top: '0px',
+                right: '0px',
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                background: stateColor,
+                border: `2px solid ${tokens.colors.surface}`,
+              }} />
+            </div>
+
+            <div>
+              <div style={{
+                fontSize: tokens.typography.fontSize.xs,
+                color: tokens.colors.textTertiary,
+                textTransform: 'uppercase',
+                letterSpacing: tokens.typography.letterSpacing.wider,
+                marginBottom: '2px',
+              }}>
+                Focus Session
+              </div>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+              }}>
+                <span style={{
+                  fontSize: tokens.typography.fontSize.lg,
+                  fontWeight: tokens.typography.fontWeight.semibold,
+                  color: tokens.colors.text,
+                  textTransform: 'capitalize',
+                }}>
+                  {focusState.focus_state === 'unknown' ? 'Analyzing...' : focusState.focus_state}
+                </span>
+                <span style={{
+                  fontSize: tokens.typography.fontSize.sm,
+                  color: stateColor,
+                  fontWeight: tokens.typography.fontWeight.medium,
+                }}>
+                  {focusScore}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {/* Timer */}
+            <div style={{ textAlign: 'right' }}>
+              <div style={{
+                fontSize: tokens.typography.fontSize.xxl,
+                fontWeight: tokens.typography.fontWeight.bold,
+                color: tokens.colors.text,
+                fontFamily: tokens.typography.fontMono,
+                fontVariantNumeric: 'tabular-nums',
+                letterSpacing: tokens.typography.letterSpacing.tight,
+                lineHeight: 1,
+              }}>
+                {formatDuration(sessionDuration)}
+              </div>
+              {currentTaskName && (
+                <div style={{
+                  fontSize: tokens.typography.fontSize.xs,
+                  color: tokens.colors.textTertiary,
+                  marginTop: '4px',
+                  maxWidth: '160px',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  textAlign: 'right',
+                }}>
+                  {currentTaskName}
+                </div>
+              )}
+            </div>
+
+            {/* Stop Button */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={onStop}
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: tokens.radius.md,
+                background: tokens.colors.dangerMuted,
+                color: tokens.colors.danger,
+                border: `1px solid rgba(239, 68, 68, 0.2)`,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: tokens.transitions.fast,
+              }}
+            >
+              <Square size={14} fill="currentColor" />
+            </motion.button>
+          </div>
+        </div>
+
+        {/* Focus Graph */}
+        <div style={{ padding: '16px 20px 20px' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '12px',
+          }}>
+            <span style={{
+              fontSize: tokens.typography.fontSize.xs,
+              color: tokens.colors.textTertiary,
+              textTransform: 'uppercase',
+              letterSpacing: tokens.typography.letterSpacing.wider,
+            }}>
+              Focus Timeline
+            </span>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <div style={{
+                  width: '8px',
+                  height: '2px',
+                  borderRadius: '1px',
+                  background: tokens.colors.accent,
+                }} />
+                <span style={{
+                  fontSize: tokens.typography.fontSize.xs,
+                  color: tokens.colors.textTertiary,
+                }}>
+                  Score
+                </span>
+              </div>
+              {focusHistory.length > 0 && (
+                <span style={{
+                  fontSize: tokens.typography.fontSize.xs,
+                  color: tokens.colors.textTertiary,
+                  fontFamily: tokens.typography.fontMono,
+                }}>
+                  avg {Math.round(focusHistory.reduce((s, p) => s + p.score, 0) / focusHistory.length)}%
+                </span>
+              )}
+            </div>
+          </div>
+
+          <FocusGraph data={focusHistory} height={180} />
+        </div>
+
+        {/* Session Details Row */}
+        <div style={{
+          padding: '0 20px 20px',
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr 1fr',
+          gap: '8px',
+        }}>
+          <DetailChip label="Desktop" value={focusState.focus_state} state={focusState.focus_state} />
+          <DetailChip label="Robot" value={robotFocus.focus_state} state={robotFocus.focus_state} />
+          <DetailChip label="Confidence" value={`${focusScore}%`} />
+        </div>
+      </div>
     </motion.div>
+  );
+};
+
+// -- Detail Chip --
+interface DetailChipProps {
+  label: string;
+  value: string;
+  state?: string;
+}
+
+const DetailChip: React.FC<DetailChipProps> = ({ label, value, state }) => {
+  const stateColor = state
+    ? state === 'focused'
+      ? tokens.colors.success
+      : state === 'distracted'
+      ? tokens.colors.danger
+      : tokens.colors.textTertiary
+    : tokens.colors.textSecondary;
+
+  return (
+    <div style={{
+      padding: '10px 12px',
+      background: tokens.colors.surfaceSecondary,
+      borderRadius: tokens.radius.md,
+      border: `1px solid ${tokens.colors.borderLight}`,
+    }}>
+      <div style={{
+        fontSize: tokens.typography.fontSize.xs,
+        color: tokens.colors.textTertiary,
+        marginBottom: '4px',
+      }}>
+        {label}
+      </div>
+      <div style={{
+        fontSize: tokens.typography.fontSize.md,
+        fontWeight: tokens.typography.fontWeight.medium,
+        color: state ? stateColor : tokens.colors.text,
+        textTransform: 'capitalize',
+      }}>
+        {value}
+      </div>
+    </div>
   );
 };
 

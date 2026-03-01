@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Sparkles, Loader2 } from 'lucide-react';
+import { Sparkles, Loader2, Plus } from 'lucide-react';
 import { tokens } from '../styles/tokens';
 
 interface TaskInputProps {
@@ -29,55 +29,50 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      style={{
-        background: tokens.colors.surface,
-        borderRadius: tokens.radius.lg,
-        boxShadow: tokens.shadows.sm,
-        border: `1px solid ${tokens.colors.border}`,
-        overflow: 'hidden',
-      }}
-    >
+    <div style={{
+      background: tokens.colors.surface,
+      borderRadius: tokens.radius.lg,
+      border: `1px solid ${tokens.colors.border}`,
+      overflow: 'hidden',
+      transition: tokens.transitions.normal,
+    }}>
       <form onSubmit={handleSubmit}>
-        <div style={{ padding: tokens.spacing.lg }}>
+        <div style={{ padding: '12px 16px' }}>
           {!isExpanded ? (
-            <motion.button
+            <button
               type="button"
               onClick={() => setIsExpanded(true)}
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
               style={{
                 width: '100%',
-                padding: `${tokens.spacing.md} ${tokens.spacing.lg}`,
-                background: tokens.colors.surfaceSecondary,
+                padding: '8px 12px',
+                background: 'transparent',
                 border: `1px dashed ${tokens.colors.border}`,
                 borderRadius: tokens.radius.md,
-                color: tokens.colors.textSecondary,
+                color: tokens.colors.textTertiary,
                 fontSize: tokens.typography.fontSize.md,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: tokens.spacing.sm,
+                gap: '8px',
                 transition: tokens.transitions.normal,
+                fontFamily: tokens.typography.fontFamily,
               }}
             >
-              <span style={{ opacity: 0.6 }}>+</span>
-              What's your task?
-            </motion.button>
+              <Plus size={14} />
+              <span>What's your task?</span>
+            </button>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacing.lg }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
-                <label
-                  style={{
-                    display: 'block',
-                    fontSize: tokens.typography.fontSize.sm,
-                    fontWeight: tokens.typography.fontWeight.medium,
-                    color: tokens.colors.textSecondary,
-                    marginBottom: tokens.spacing.xs,
-                  }}
-                >
+                <label style={{
+                  display: 'block',
+                  fontSize: tokens.typography.fontSize.xs,
+                  fontWeight: tokens.typography.fontWeight.medium,
+                  color: tokens.colors.textTertiary,
+                  textTransform: 'uppercase',
+                  letterSpacing: tokens.typography.letterSpacing.wider,
+                  marginBottom: '6px',
+                }}>
                   Task name
                 </label>
                 <input
@@ -88,19 +83,20 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
                   autoFocus
                   style={{
                     width: '100%',
-                    padding: `${tokens.spacing.md} ${tokens.spacing.md}`,
-                    fontSize: tokens.typography.fontSize.lg,
+                    padding: '8px 10px',
+                    fontSize: tokens.typography.fontSize.base,
                     fontWeight: tokens.typography.fontWeight.medium,
                     border: `1px solid ${tokens.colors.border}`,
-                    borderRadius: tokens.radius.md,
+                    borderRadius: tokens.radius.sm,
                     outline: 'none',
-                    background: tokens.colors.surface,
+                    background: tokens.colors.surfaceSecondary,
                     color: tokens.colors.text,
                     transition: tokens.transitions.fast,
+                    fontFamily: tokens.typography.fontFamily,
                   }}
                   onFocus={(e) => {
                     e.target.style.borderColor = tokens.colors.accent;
-                    e.target.style.boxShadow = `0 0 0 3px ${tokens.colors.focusLight}`;
+                    e.target.style.boxShadow = `0 0 0 2px ${tokens.colors.accentMuted}`;
                   }}
                   onBlur={(e) => {
                     e.target.style.borderColor = tokens.colors.border;
@@ -110,39 +106,39 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
               </div>
 
               <div>
-                <label
-                  style={{
-                    display: 'block',
-                    fontSize: tokens.typography.fontSize.sm,
-                    fontWeight: tokens.typography.fontWeight.medium,
-                    color: tokens.colors.textSecondary,
-                    marginBottom: tokens.spacing.xs,
-                  }}
-                >
+                <label style={{
+                  display: 'block',
+                  fontSize: tokens.typography.fontSize.xs,
+                  fontWeight: tokens.typography.fontWeight.medium,
+                  color: tokens.colors.textTertiary,
+                  textTransform: 'uppercase',
+                  letterSpacing: tokens.typography.letterSpacing.wider,
+                  marginBottom: '6px',
+                }}>
                   Description (optional)
                 </label>
                 <textarea
                   value={taskDescription}
                   onChange={(e) => setTaskDescription(e.target.value)}
-                  placeholder="Describe your task in detail so we can break it down into actionable steps..."
-                  rows={3}
+                  placeholder="Describe your task..."
+                  rows={2}
                   style={{
                     width: '100%',
-                    padding: `${tokens.spacing.md} ${tokens.spacing.md}`,
+                    padding: '8px 10px',
                     fontSize: tokens.typography.fontSize.md,
                     fontFamily: tokens.typography.fontFamily,
                     border: `1px solid ${tokens.colors.border}`,
-                    borderRadius: tokens.radius.md,
+                    borderRadius: tokens.radius.sm,
                     outline: 'none',
-                    background: tokens.colors.surface,
+                    background: tokens.colors.surfaceSecondary,
                     color: tokens.colors.text,
                     resize: 'vertical',
-                    minHeight: '80px',
+                    minHeight: '60px',
                     transition: tokens.transitions.fast,
                   }}
                   onFocus={(e) => {
                     e.target.style.borderColor = tokens.colors.accent;
-                    e.target.style.boxShadow = `0 0 0 3px ${tokens.colors.focusLight}`;
+                    e.target.style.boxShadow = `0 0 0 2px ${tokens.colors.accentMuted}`;
                   }}
                   onBlur={(e) => {
                     e.target.style.borderColor = tokens.colors.border;
@@ -151,7 +147,7 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
                 />
               </div>
 
-              <div style={{ display: 'flex', gap: tokens.spacing.sm, justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -160,14 +156,15 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
                     setTaskDescription('');
                   }}
                   style={{
-                    padding: `${tokens.spacing.sm} ${tokens.spacing.lg}`,
-                    fontSize: tokens.typography.fontSize.md,
+                    padding: '6px 14px',
+                    fontSize: tokens.typography.fontSize.sm,
                     fontWeight: tokens.typography.fontWeight.medium,
                     color: tokens.colors.textSecondary,
                     background: 'transparent',
                     border: 'none',
-                    borderRadius: tokens.radius.md,
+                    borderRadius: tokens.radius.sm,
                     cursor: 'pointer',
+                    fontFamily: tokens.typography.fontFamily,
                   }}
                 >
                   Cancel
@@ -178,28 +175,29 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   style={{
-                    padding: `${tokens.spacing.sm} ${tokens.spacing.lg}`,
-                    fontSize: tokens.typography.fontSize.md,
+                    padding: '6px 14px',
+                    fontSize: tokens.typography.fontSize.sm,
                     fontWeight: tokens.typography.fontWeight.medium,
-                    color: tokens.colors.surface,
-                    background: taskName.trim() && !isGenerating ? tokens.colors.accent : tokens.colors.border,
+                    color: taskName.trim() && !isGenerating ? '#fff' : tokens.colors.textTertiary,
+                    background: taskName.trim() && !isGenerating ? tokens.colors.accent : tokens.colors.surfaceActive,
                     border: 'none',
-                    borderRadius: tokens.radius.md,
+                    borderRadius: tokens.radius.sm,
                     cursor: taskName.trim() && !isGenerating ? 'pointer' : 'not-allowed',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: tokens.spacing.xs,
+                    gap: '6px',
                     transition: tokens.transitions.fast,
+                    fontFamily: tokens.typography.fontFamily,
                   }}
                 >
                   {isGenerating ? (
                     <>
-                      <Loader2 size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
+                      <Loader2 size={14} className="animate-spin" />
                       Generating...
                     </>
                   ) : (
                     <>
-                      <Sparkles size={16} />
+                      <Sparkles size={14} />
                       Generate Todos
                     </>
                   )}
@@ -209,13 +207,7 @@ const TaskInput: React.FC<TaskInputProps> = ({ onGenerate }) => {
           )}
         </div>
       </form>
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
-    </motion.div>
+    </div>
   );
 };
 

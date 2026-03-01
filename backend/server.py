@@ -9,16 +9,25 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import httpx
 from PIL import Image
 import io
 import base64
+import boto3
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 PORT = int(os.getenv("PORT", "9800"))
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "GkJlvmrgptESTkEGdgKjvQziz8aAWvCq")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+
+# AWS Bedrock Configuration
+BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-west-2")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "mistral.mistral-large-2407-v1:0")
 
 # Active WebSocket connections
 desktop_connections: list[WebSocket] = []
@@ -383,6 +392,210 @@ async def broadcast_message(message: dict):
         "status": "broadcasted",
         "recipients": len(desktop_connections) + len(robot_connections),
     }
+
+
+# --- Todo Generation Agent (AWS Bedrock + Mistral Large) ---
+
+TODO_SYSTEM_PROMPT = """You are an expert productivity and task-planning AI agent. Your job is to take a task name and optional description, then generate an optimal, actionable todo list to complete that task.
+
+Rules:
+1. Break the task into 3-8 concrete, actionable steps.
+2. Order steps by logical dependency — what must be done first comes first.
+3. Each step should be small enough to complete in one focused session (15-60 min).
+4. Use clear, imperative language (e.g., "Set up project repository", not "Setting up").
+5. Include a brief description for each step explaining what specifically to do.
+6. Consider: research/planning steps first, then implementation, then testing/review.
+7. Be specific to the task — don't give generic advice.
+
+Respond with ONLY a valid JSON object in this exact format:
+{
+  "todos": [
+    {"title": "Step title", "description": "Brief description of what to do"},
+    {"title": "Step title", "description": "Brief description of what to do"}
+  ]
+}"""
+
+
+class GenerateTodosRequest(BaseModel):
+    task_name: str
+    task_description: str = ""
+
+
+async def call_bedrock_mistral(prompt: str, system_prompt: str) -> Optional[dict]:
+    """Call Mistral Large via AWS Bedrock using boto3."""
+    try:
+        bedrock_client = boto3.client(
+            "bedrock-runtime",
+            region_name=BEDROCK_REGION,
+        )
+
+        body = json.dumps(
+            {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                "max_tokens": 2048,
+                "temperature": 0.7,
+            }
+        )
+
+        response = bedrock_client.invoke_model(
+            modelId=BEDROCK_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=body,
+        )
+
+        raw_body = response["body"].read()
+        result = json.loads(raw_body)
+        content = (
+            result.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        if not content:
+            logger.warning("Bedrock returned empty content")
+            return None
+
+        # Try to parse the content as JSON directly
+        try:
+            parsed = json.loads(content)
+            logger.info("Bedrock Mistral Large responded successfully")
+            return parsed
+        except json.JSONDecodeError:
+            # The model may have returned JSON wrapped in markdown code blocks
+            import re
+            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
+            if json_match:
+                parsed = json.loads(json_match.group(1).strip())
+                logger.info("Bedrock Mistral Large responded (extracted from code block)")
+                return parsed
+            # Try to find raw JSON object in the text
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                logger.info("Bedrock Mistral Large responded (extracted JSON object)")
+                return parsed
+            logger.warning(f"Bedrock returned non-JSON content: {content[:200]}")
+            return None
+    except Exception as e:
+        logger.warning(f"Bedrock call failed: {e}")
+
+    return None
+
+
+async def call_mistral_api(prompt: str, system_prompt: str) -> Optional[dict]:
+    """Fallback: Call Mistral API directly."""
+    if not MISTRAL_API_KEY:
+        return None
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "mistral-large-latest",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.7,
+                    "max_tokens": 2048,
+                },
+                timeout=30.0,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                content = (
+                    result.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "{}")
+                )
+                return json.loads(content)
+            else:
+                logger.warning(
+                    f"Mistral API returned {response.status_code}: {response.text}"
+                )
+        except Exception as e:
+            logger.warning(f"Mistral API call failed: {e}")
+
+    return None
+
+
+@app.post("/api/generate-todos")
+async def generate_todos(request: GenerateTodosRequest):
+    """
+    AI agent that generates an optimal todo list for a given task.
+    Uses AWS Bedrock with Mistral Large, with Mistral API as fallback.
+    """
+    task_name = request.task_name.strip()
+    task_description = request.task_description.strip()
+
+    if not task_name:
+        raise HTTPException(status_code=400, detail="Task name is required")
+
+    # Build the user prompt
+    prompt = f"Task: {task_name}"
+    if task_description:
+        prompt += f"\nDescription: {task_description}"
+    prompt += "\n\nGenerate an optimal, ordered todo list to complete this task."
+
+    # Try Bedrock first, then Mistral API fallback
+    result = await call_bedrock_mistral(prompt, TODO_SYSTEM_PROMPT)
+
+    if result is None:
+        logger.info("Bedrock unavailable, falling back to Mistral API")
+        result = await call_mistral_api(prompt, TODO_SYSTEM_PROMPT)
+
+    if result is None:
+        # Final fallback: generate basic todos locally
+        logger.info("All AI services unavailable, using local fallback")
+        result = {
+            "todos": [
+                {"title": "Research", "description": f"Research requirements and resources for: {task_name}"},
+                {"title": "Plan", "description": "Create a detailed plan and outline"},
+                {"title": "Implement", "description": "Implement the core functionality"},
+                {"title": "Test", "description": "Test and verify the implementation"},
+                {"title": "Refine", "description": "Refine, polish, and document the result"},
+            ]
+        }
+
+    # Validate response structure
+    todos = result.get("todos", [])
+    if not isinstance(todos, list) or len(todos) == 0:
+        todos = [
+            {"title": "Research", "description": f"Research: {task_name}"},
+            {"title": "Plan", "description": "Create a plan"},
+            {"title": "Implement", "description": "Build the core work"},
+            {"title": "Review", "description": "Review and finalize"},
+        ]
+
+    # Ensure each todo has required fields
+    validated_todos = []
+    for todo in todos:
+        if isinstance(todo, dict) and "title" in todo:
+            validated_todos.append(
+                {
+                    "title": todo.get("title", "Untitled"),
+                    "description": todo.get("description", ""),
+                }
+            )
+
+    return {"todos": validated_todos}
 
 
 if __name__ == "__main__":

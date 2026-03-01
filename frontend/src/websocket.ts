@@ -10,6 +10,13 @@ export interface FocusState {
   source?: 'desktop' | 'robot';
 }
 
+export interface FocusDataPoint {
+  time: number; // seconds since session start
+  score: number; // 0-100
+  state: 'focused' | 'distracted' | 'unknown';
+  timestamp: string;
+}
+
 export interface WebSocketMessage {
   type: 'focus_update' | 'notification' | 'reaction' | 'ping' | 'pong';
   source: 'desktop' | 'robot' | 'server';
@@ -35,12 +42,38 @@ export function useFocusDetection() {
     reason: '',
     source: 'robot',
   });
+  const [focusHistory, setFocusHistory] = useState<FocusDataPoint[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [screenshotInterval, setScreenshotInterval] = useState<number | null>(null);
   const [autoDetect, setAutoDetect] = useState(true);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const sessionStartRef = useRef<number | null>(null);
+
+  const addFocusDataPoint = useCallback((state: FocusState) => {
+    if (sessionStartRef.current === null) return;
+    
+    const elapsed = Math.floor((Date.now() - sessionStartRef.current) / 1000);
+    const point: FocusDataPoint = {
+      time: elapsed,
+      score: Math.round(state.confidence * 100),
+      state: state.focus_state,
+      timestamp: new Date().toISOString(),
+    };
+    
+    setFocusHistory(prev => [...prev, point]);
+  }, []);
+
+  const clearFocusHistory = useCallback(() => {
+    setFocusHistory([]);
+    sessionStartRef.current = null;
+  }, []);
+
+  const startSession = useCallback(() => {
+    sessionStartRef.current = Date.now();
+    setFocusHistory([]);
+  }, []);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -60,7 +93,6 @@ export function useFocusDetection() {
     ws.onmessage = (event) => {
       try {
         const message: WebSocketMessage = JSON.parse(event.data);
-        console.log('Received:', message);
 
         if (message.type === 'focus_update' && message.source === 'robot') {
           const payload = message.payload as unknown as FocusState;
@@ -83,7 +115,6 @@ export function useFocusDetection() {
       wsRef.current = null;
 
       reconnectTimeoutRef.current = setTimeout(() => {
-        console.log('Attempting to reconnect...');
         connect();
       }, 3000);
     };
@@ -154,7 +185,6 @@ export function useFocusDetection() {
         return;
       }
 
-      // Get window and activity data
       const focusData = await collectFocusData();
 
       const focusState: FocusState = {
@@ -166,8 +196,8 @@ export function useFocusDetection() {
       };
       
       setDesktopFocus(focusState);
+      addFocusDataPoint(focusState);
       
-      // Send combined data to backend
       sendMessage({
         type: 'focus_update',
         source: 'desktop',
@@ -192,15 +222,16 @@ export function useFocusDetection() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [isAnalyzing, sendFocusUpdate, sendReaction, sendMessage]);
+  }, [isAnalyzing, sendFocusUpdate, sendReaction, sendMessage, addFocusDataPoint]);
 
   const startAutoDetection = useCallback(() => {
     if (screenshotInterval) return;
+    startSession();
     const interval = window.setInterval(analyzeScreenshot, SCREENSHOT_INTERVAL);
     setScreenshotInterval(interval);
     setAutoDetect(true);
-    analyzeScreenshot(); // Run immediately
-  }, [screenshotInterval, analyzeScreenshot]);
+    analyzeScreenshot();
+  }, [screenshotInterval, analyzeScreenshot, startSession]);
 
   const stopAutoDetection = useCallback(() => {
     if (screenshotInterval) {
@@ -213,7 +244,6 @@ export function useFocusDetection() {
   useEffect(() => {
     startDataCollection();
     connect();
-    startAutoDetection();
     return () => {
       stopAutoDetection();
       stopDataCollection();
@@ -234,12 +264,14 @@ export function useFocusDetection() {
     isConnected,
     desktopFocus,
     robotFocus,
+    focusHistory,
     isAnalyzing,
     autoDetect,
     permissionError,
     sendReaction,
     startAutoDetection,
     stopAutoDetection,
+    clearFocusHistory,
     connect,
     disconnect,
     openSystemPreferences,

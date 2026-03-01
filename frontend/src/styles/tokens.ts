@@ -1,36 +1,66 @@
 export const tokens = {
   colors: {
-    background: '#F7F7F5',
-    surface: '#FFFFFF',
-    surfaceSecondary: '#F7F6F3',
-    surfaceHover: '#EFEFEE',
-    text: '#37352F',
-    textSecondary: '#9B9A97',
-    textTertiary: '#EBEBE9',
-    accent: '#2EAADC',
-    accentHover: '#2596C8',
-    success: '#0F7B6C',
-    successLight: '#D4EDDA',
-    warning: '#E7A62E',
-    warningLight: '#FFF3CD',
-    danger: '#DC4C4C',
-    dangerLight: '#F8D7DA',
-    border: '#E9E9E7',
-    borderLight: '#F0F0EE',
-    focus: '#4A90D9',
-    focusLight: '#E3F2FD',
+    // Backgrounds - warm Notion-style darks
+    background: '#191919',
+    backgroundSecondary: '#1E1E1E',
+    
+    // Surfaces - card/panel layers
+    surface: '#202020',
+    surfaceSecondary: '#252525',
+    surfaceHover: '#2C2C2C',
+    surfaceActive: '#333333',
+    
+    // Sidebar
+    sidebar: '#1C1C1C',
+    sidebarHover: '#272727',
+    sidebarActive: '#2B2B2B',
+    
+    // Text - white with varying opacity
+    text: 'rgba(255, 255, 255, 0.87)',
+    textSecondary: 'rgba(255, 255, 255, 0.54)',
+    textTertiary: 'rgba(255, 255, 255, 0.28)',
+    textInverse: '#191919',
+    
+    // Accent - soft blue
+    accent: '#528BFF',
+    accentHover: '#6B9FFF',
+    accentMuted: 'rgba(82, 139, 255, 0.15)',
+    accentText: '#528BFF',
+    
+    // Status colors
+    success: '#3ECF8E',
+    successMuted: 'rgba(62, 207, 142, 0.12)',
+    warning: '#F0B429',
+    warningMuted: 'rgba(240, 180, 41, 0.12)',
+    danger: '#EF4444',
+    dangerMuted: 'rgba(239, 68, 68, 0.12)',
+    
+    // Borders - subtle
+    border: 'rgba(255, 255, 255, 0.08)',
+    borderLight: 'rgba(255, 255, 255, 0.05)',
+    borderHover: 'rgba(255, 255, 255, 0.14)',
+    
+    // Focus graph colors
+    graphGreen: '#3ECF8E',
+    graphRed: '#EF4444',
+    graphLine: '#528BFF',
+    graphGrid: 'rgba(255, 255, 255, 0.04)',
+    graphArea: 'rgba(82, 139, 255, 0.08)',
   },
   shadows: {
-    sm: '0 1px 2px rgba(0,0,0,0.04)',
-    md: '0 4px 12px rgba(0,0,0,0.08)',
-    lg: '0 8px 24px rgba(0,0,0,0.12)',
-    xl: '0 12px 32px rgba(0,0,0,0.16)',
+    sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
+    md: '0 4px 12px rgba(0, 0, 0, 0.4)',
+    lg: '0 8px 24px rgba(0, 0, 0, 0.5)',
+    xl: '0 12px 40px rgba(0, 0, 0, 0.6)',
+    glow: '0 0 20px rgba(82, 139, 255, 0.15)',
   },
   radius: {
+    xs: '4px',
     sm: '6px',
-    md: '10px',
-    lg: '14px',
-    xl: '20px',
+    md: '8px',
+    lg: '12px',
+    xl: '16px',
+    xxl: '20px',
     full: '9999px',
   },
   spacing: {
@@ -40,17 +70,21 @@ export const tokens = {
     lg: '16px',
     xl: '24px',
     xxl: '32px',
+    xxxl: '48px',
   },
   typography: {
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    fontMono: '"SF Mono", "Fira Code", "JetBrains Mono", Menlo, Monaco, monospace',
     fontSize: {
       xs: '11px',
       sm: '12px',
-      md: '14px',
+      md: '13px',
+      base: '14px',
       lg: '16px',
       xl: '20px',
-      xxl: '28px',
-      xxxl: '36px',
+      xxl: '24px',
+      xxxl: '32px',
+      display: '48px',
     },
     fontWeight: {
       regular: 400,
@@ -63,22 +97,31 @@ export const tokens = {
       normal: 1.5,
       relaxed: 1.7,
     },
+    letterSpacing: {
+      tight: '-0.02em',
+      normal: '0',
+      wide: '0.04em',
+      wider: '0.08em',
+    },
   },
   transitions: {
-    fast: '0.15s ease',
-    normal: '0.25s ease',
-    slow: '0.4s ease',
+    fast: '0.1s ease',
+    normal: '0.2s ease',
+    slow: '0.35s ease',
+    spring: '0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
   },
   layout: {
-    maxWidth: '900px',
+    maxWidth: '1200px',
     sidebarWidth: '240px',
+    sidebarCollapsed: '64px',
+    headerHeight: '48px',
   },
 };
 
 export const focusColors = {
-  focused: '#0F7B6C',
-  distracted: '#DC4C4C',
-  unknown: '#9B9A97',
+  focused: tokens.colors.success,
+  distracted: tokens.colors.danger,
+  unknown: tokens.colors.textTertiary,
 };
 
 export const getFocusColor = (state: string) => {
@@ -87,8 +130,8 @@ export const getFocusColor = (state: string) => {
 
 export const getFocusBg = (state: string) => {
   switch (state) {
-    case 'focused': return '#E6F7F5';
-    case 'distracted': return '#FDECEC';
-    default: return '#F5F5F5';
+    case 'focused': return tokens.colors.successMuted;
+    case 'distracted': return tokens.colors.dangerMuted;
+    default: return tokens.colors.surfaceSecondary;
   }
 };
