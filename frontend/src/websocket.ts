@@ -4,7 +4,7 @@ import { captureAndAnalyze } from './screenshot';
 export interface FocusState {
   focus_state: 'focused' | 'distracted' | 'unknown';
   confidence: number;
-  reason: string;
+  reason: unknown;
   timestamp?: string;
   source?: 'desktop' | 'robot';
 }
@@ -129,6 +129,15 @@ export function useFocusDetection() {
     });
   }, [sendMessage]);
 
+  const sendVoiceEvent = useCallback((event: string, text: string) => {
+    sendMessage({
+      type: 'voice_event',
+      source: 'desktop',
+      timestamp: new Date().toISOString(),
+      payload: { event, text },
+    });
+  }, [sendMessage]);
+
   const analyzeScreenshot = useCallback(async () => {
     if (isAnalyzing) return;
     
@@ -192,6 +201,7 @@ export function useFocusDetection() {
     isAnalyzing,
     autoDetect,
     sendReaction,
+    sendVoiceEvent,
     startAutoDetection,
     stopAutoDetection,
     connect,

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useFocusDetection } from './websocket';
+import ConversationPanel from './Conversation';
 
 const styles = {
   container: {
@@ -147,6 +148,16 @@ function getFocusColor(state: string) {
   }
 }
 
+function formatReason(reason: unknown): string {
+  if (!reason) return '';
+  if (typeof reason === 'string') return reason;
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
 function getFocusIcon(state: string) {
   switch (state) {
     case 'focused': return '🎯';
@@ -162,6 +173,7 @@ const App: React.FC = () => {
     robotFocus,
     isAnalyzing,
     autoDetect,
+    sendVoiceEvent,
     startAutoDetection,
     stopAutoDetection,
   } = useFocusDetection();
@@ -212,7 +224,7 @@ const App: React.FC = () => {
             </div>
           </div>
           {desktopFocus.reason && (
-            <div style={styles.reason}>{desktopFocus.reason}</div>
+            <div style={styles.reason}>{formatReason(desktopFocus.reason)}</div>
           )}
         </div>
 
@@ -236,7 +248,7 @@ const App: React.FC = () => {
             </div>
           </div>
           {robotFocus.reason && (
-            <div style={styles.reason}>{robotFocus.reason}</div>
+            <div style={styles.reason}>{formatReason(robotFocus.reason)}</div>
           )}
         </div>
 
@@ -253,6 +265,14 @@ const App: React.FC = () => {
         >
           {isAnalyzing ? '⏳ Analyzing...' : autoDetect ? '⏹ Stop Detection' : '▶ Start Detection'}
         </button>
+
+        {/* Voice Conversation */}
+        <ConversationPanel
+          focusState={desktopFocus.focus_state}
+          confidence={desktopFocus.confidence}
+          reason={desktopFocus.reason}
+          sendVoiceEvent={sendVoiceEvent}
+        />
 
         <div style={styles.stats}>
           <div style={styles.statItem}>

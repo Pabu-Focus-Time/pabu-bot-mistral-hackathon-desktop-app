@@ -10,6 +10,7 @@ import websocket_client
 import focus_detector
 import reactions
 import audio_player
+import voice_agent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,8 +28,10 @@ class FocusTimeRobot:
         self.reaction_handler: reactions.ReactionsWithAudio = None
         self.audio: audio_player.AudioPlayer = None
         self.simulation: simulation.Simulation = None
+        self.voice: voice_agent.VoiceAgent = None
         
         self._running = False
+        self._loop = None
     
     async def setup(self):
         """Initialize all components"""
@@ -54,6 +57,12 @@ class FocusTimeRobot:
         # Set up focus callback to send to server
         self.focus_det.set_focus_callback(self._on_focus_update)
         
+        # Create voice agent (independent of robot simulation mode)
+        self.voice = voice_agent.create_voice_agent(
+            on_agent_response=self._on_agent_response,
+            on_user_transcript=self._on_user_transcript,
+        )
+        
         # Create WebSocket client
         self.ws_client = await websocket_client.create_client(
             on_message=self._on_server_message,
@@ -73,10 +82,24 @@ class FocusTimeRobot:
                 "Hi! I'm ready to help you focus!"
             ))
             asyncio.create_task(self.reaction_handler.uh_oh())
+        
+        # Only start the Python voice agent when explicitly enabled
+        # (disabled by default because the frontend handles voice via React SDK)
+        if self.voice and not self.voice.is_running and config.VOICE_AGENT_ENABLED:
+            self.voice.start()
     
     def _on_disconnect(self):
         """Called when WebSocket disconnects"""
         logger.info("Disconnected from server")
+    
+    def _on_agent_response(self, response: str):
+        """Called when ElevenLabs agent speaks (runs in ElevenLabs thread)"""
+        if self.reaction_handler and self._loop:
+            self._loop.call_soon_threadsafe(asyncio.ensure_future, self.reaction_handler.nod())
+    
+    def _on_user_transcript(self, transcript: str):
+        """Called when user speech is transcribed"""
+        logger.info(f"User transcript: {transcript}")
     
     async def _on_focus_update(self, result: dict):
         """Handle focus state update from detector"""
@@ -92,6 +115,14 @@ class FocusTimeRobot:
             reason=result.get("reason", ""),
             reaction="none"
         )
+        
+        # Send focus context to voice agent
+        if self.voice and self.voice.is_running:
+            confidence = result.get("confidence", 0.0)
+            reason = result.get("reason", "")
+            self.voice.send_context(
+                f'User is "{focus_state}" (confidence: {confidence:.0%}). Reason: {reason}'
+            )
         
         # React based on focus state
         if focus_state == "distracted":
@@ -117,6 +148,9 @@ class FocusTimeRobot:
             else:
                 await self.reaction_handler.execute_reaction(reaction)
         
+        elif msg_type == "voice_event":
+            await self._handle_voice_event(payload)
+        
         elif msg_type == "notification":
             notif_type = payload.get("notification_type")
             text = payload.get("message", "")
@@ -127,9 +161,31 @@ class FocusTimeRobot:
         elif msg_type == "ping":
             await self.ws_client.send({"type": "pong", "source": "robot"})
     
+    async def _handle_voice_event(self, payload: dict):
+        """Handle voice events relayed from the frontend ElevenLabs agent"""
+        event = payload.get("event")
+        text = payload.get("text", "")
+        
+        if event == "agent_response":
+            logger.info(f"Agent response (via frontend): {text}")
+            if self.reaction_handler:
+                await self.reaction_handler.nod()
+        
+        elif event == "user_transcript":
+            logger.info(f"User transcript (via frontend): {text}")
+            if self.reaction_handler:
+                await self.reaction_handler.tilt_head(angle=10)
+        
+        elif event == "connected":
+            logger.info("Frontend voice agent connected")
+        
+        elif event == "disconnected":
+            logger.info("Frontend voice agent disconnected")
+    
     async def run(self):
         """Run the application"""
         self._running = True
+        self._loop = asyncio.get_running_loop()
         
         # Start WebSocket client
         await self.ws_client.run_background()
@@ -156,6 +212,9 @@ class FocusTimeRobot:
         
         if self.audio:
             await self.audio.close()
+        
+        if self.voice:
+            self.voice.stop()
         
         if self.simulation:
             self.simulation.cleanup()

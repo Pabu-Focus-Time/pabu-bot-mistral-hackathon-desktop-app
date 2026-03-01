@@ -6,3 +6,4 @@ numpy
 pygame
 pyttsx3
 reachy-mini
+elevenlabs[pyaudio]
