@@ -12,6 +12,8 @@ export interface ElectronAPI {
   openSystemPreferences: () => Promise<void>;
   getActiveWindow: () => Promise<WindowData>;
   sendNotification: (title: string, body: string) => Promise<void>;
+  enterFocusBlock: () => Promise<void>;
+  exitFocusBlock: () => Promise<void>;
 }
 
 declare global {
@@ -26,4 +28,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openSystemPreferences: () => ipcRenderer.invoke('open-system-preferences'),
   getActiveWindow: () => ipcRenderer.invoke('get-active-window'),
   sendNotification: (title: string, body: string) => ipcRenderer.invoke('send-notification', title, body),
+  enterFocusBlock: () => ipcRenderer.invoke('enter-focus-block'),
+  exitFocusBlock: () => ipcRenderer.invoke('exit-focus-block'),
 });

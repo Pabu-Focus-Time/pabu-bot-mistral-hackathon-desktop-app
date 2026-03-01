@@ -267,6 +267,11 @@ const setTaskContext = useCallback((
     setShowDistraction(false);
     setDistractionResources([]);
     setIsLoadingResources(false);
+    // Exit focus-block mode: restore normal window
+    const api = (window as any).electronAPI;
+    if (api?.exitFocusBlock) {
+      api.exitFocusBlock();
+    }
   }, []);
 
   const analyzeScreenshot = useCallback(async () => {
@@ -343,8 +348,12 @@ const setTaskContext = useCallback((
           setShowDistraction(true);
           setDistractionResources([]);
           fetchResources();
-          // Send native macOS notification
+          // Enter focus-block mode: fullscreen + always-on-top
           const api = (window as any).electronAPI;
+          if (api?.enterFocusBlock) {
+            api.enterFocusBlock();
+          }
+          // Also send native notification as fallback
           if (api?.sendNotification) {
             const taskName = taskContextRef.current?.task_name || 'your task';
             api.sendNotification(
@@ -352,8 +361,6 @@ const setTaskContext = useCallback((
               `Get back to ${taskName}`,
             );
           }
-          // Auto-dismiss after 30 seconds
-          setTimeout(() => setShowDistraction(false), 30000);
         }
         prevFocusStateRef.current = focusState.focus_state;
 

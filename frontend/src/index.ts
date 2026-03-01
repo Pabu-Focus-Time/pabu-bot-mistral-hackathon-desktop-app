@@ -12,9 +12,11 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+let mainWindow: BrowserWindow | null = null;
+
 const createWindow = (): void => {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     height: 600,
     width: 800,
     webPreferences: {
@@ -115,6 +117,25 @@ ipcMain.handle('send-notification', async (_event, title: string, body: string) 
     });
     notification.show();
   }
+});
+
+// IPC handler: enter focus-block mode (fullscreen + always-on-top to block the user)
+ipcMain.handle('enter-focus-block', async () => {
+  if (!mainWindow) return;
+  mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  mainWindow.setSimpleFullScreen(true);
+  mainWindow.setClosable(false);
+  mainWindow.setMinimizable(false);
+  mainWindow.focus();
+});
+
+// IPC handler: exit focus-block mode (restore normal window)
+ipcMain.handle('exit-focus-block', async () => {
+  if (!mainWindow) return;
+  mainWindow.setSimpleFullScreen(false);
+  mainWindow.setAlwaysOnTop(false);
+  mainWindow.setClosable(true);
+  mainWindow.setMinimizable(true);
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common
