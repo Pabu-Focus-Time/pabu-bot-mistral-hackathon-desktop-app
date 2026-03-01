@@ -222,6 +222,142 @@ async def text_to_speech(text_data: dict):
             raise HTTPException(status_code=500, detail=f"TTS Error: {str(e)}")
 
 
+@app.post("/api/analyze-multi-agent")
+async def analyze_multi_agent(data: dict):
+    """
+    Combined analysis from multiple agents:
+    - Vision Agent: screenshot analysis
+    - Window Agent: active window data
+    - Activity Agent: keyboard/mouse patterns
+    
+    Returns synthesized focus decision considering all signals.
+    """
+    vision_analysis = data.get("vision_analysis", {})
+    window_data = data.get("window_data")
+    activity_data = data.get("activity_data")
+    task_context = data.get("task_context", {})
+    
+    # Build context for synthesis
+    context_parts = []
+    
+    # Vision context
+    if vision_analysis:
+        focus_state = vision_analysis.get("focus_state", "unknown")
+        confidence = vision_analysis.get("confidence", 0)
+        vision_reason = vision_analysis.get("reason", "")
+        context_parts.append(
+            f"Vision Analysis: User appears {focus_state} ({confidence*100:.0f}% confidence). {vision_reason}"
+        )
+    
+    # Window context
+    if window_data:
+        app_name = window_data.get("app_name", "Unknown")
+        window_title = window_data.get("window_title", "")
+        context = f"Active window: {app_name}"
+        if window_title:
+            context += f" - {window_title}"
+        context_parts.append(context)
+    
+    # Activity context
+    if activity_data:
+        idle = activity_data.get("idle_seconds", 0)
+        switches = activity_data.get("window_switch_count", 0)
+        keys = activity_data.get("keypress_count", 0)
+        context_parts.append(
+            f"Activity: {idle}s idle, {switches} window switches, {keys} keypresses in last interval"
+        )
+    
+    # Task context
+    if task_context:
+        task_name = task_context.get("task_name", "")
+        current_todo = task_context.get("current_todo", "")
+        if task_name:
+            context_parts.append(f"Task: {task_name}")
+        if current_todo:
+            context_parts.append(f"Working on: {current_todo}")
+    
+    # If we have Mistral, do a synthesis
+    if MISTRAL_API_KEY:
+        async with httpx.AsyncClient() as client:
+            try:
+                prompt = f"""Analyze the user's focus state based on these signals:
+{chr(10).join(f"- {p}" for p in context_parts)}
+
+Considering ALL signals above, determine if the user is:
+- "focused": Actively working on the task
+- "distracted": Not working on the task (browsing, social media, etc.)
+- "unknown": Cannot determine
+
+Respond with ONLY a JSON object: {{"focus_state": "focused|distracted|unknown", "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
+
+                response = await client.post(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "mistral-small-latest",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=10.0,
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                    try:
+                        synthesis = json.loads(content)
+                        return {
+                            "focus_state": synthesis.get("focus_state", "unknown"),
+                            "confidence": synthesis.get("confidence", 0),
+                            "reason": synthesis.get("reason", ""),
+                            "vision_analysis": vision_analysis,
+                            "window_data": window_data,
+                            "activity_data": activity_data,
+                        }
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Multi-agent synthesis error: {e}")
+    
+    # Fallback: simple heuristic
+    focus_state = "unknown"
+    confidence = 0.3
+    reason = "Insufficient data for analysis"
+    
+    # Simple rule-based fallback
+    if window_data:
+        app_name = window_data.get("app_name", "").lower()
+        distracting_apps = ["safari", "chrome", "twitter", "facebook", "youtube", "reddit", "tiktok", "instagram"]
+        productive_apps = ["vscode", "xcode", "terminal", "vim", "sublime", "atom", "intellij", "pycharm"]
+        
+        if any(app in app_name for app in distracting_apps):
+            focus_state = "distracted"
+            confidence = 0.5
+            reason = f"Using potentially distracting app: {window_data.get('app_name')}"
+        elif any(app in app_name for app in productive_apps):
+            focus_state = "focused"
+            confidence = 0.6
+            reason = f"Using productive app: {window_data.get('app_name')}"
+    
+    if activity_data:
+        if activity_data.get("idle_seconds", 0) > 60:
+            focus_state = "unknown"
+            confidence = 0.7
+            reason = "User appears idle"
+    
+    return {
+        "focus_state": focus_state,
+        "confidence": confidence,
+        "reason": reason,
+        "vision_analysis": vision_analysis,
+        "window_data": window_data,
+        "activity_data": activity_data,
+    }
+
+
 @app.post("/api/broadcast")
 async def broadcast_message(message: dict):
     """Broadcast a message to all connected clients"""
