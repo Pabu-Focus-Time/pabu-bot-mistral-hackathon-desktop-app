@@ -95,12 +95,6 @@ $$
 \overline{s}^{col}_t = \frac{1}{RC}\sum_{r=1}^{R}\sum_{c=1}^{C} s^{col}_{t,r,c}
 $$
 
-Finally, similarity is converted into a change score:
-
-$$
-\mathrm{dino\_col\_change}_t = 1 - \overline{s}^{col}_t
-$$
-
 **Interpretation:**
 - **Near 0** — screen is very similar to the previous frame (possibly after a small scroll). Cached focus result is returned.
 - **Larger values** — screen content changed meaningfully. LLM analysis is triggered.
