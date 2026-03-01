@@ -81,3 +81,6 @@ mean_cls_comparison.py
 
 # Large demo media (keep out of git)
 assets/*.gif
+
+# Trigger logs
+trigger_events.jsonl

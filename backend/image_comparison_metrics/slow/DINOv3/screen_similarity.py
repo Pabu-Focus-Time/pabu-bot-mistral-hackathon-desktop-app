@@ -95,6 +95,11 @@ prev_shape = None  # (rows, cols, stride)
 CHANGE_HISTORY_MAX = int(os.environ.get("DINO_CHANGE_HISTORY", "240"))
 change_hist_pixel = []
 change_hist_dino = []
+change_hist_dino_col = []
+PLOT_YMAX = float(os.environ.get("DINO_PLOT_YMAX", "0.4"))
+PLOT_TITLE_SCALE = float(os.environ.get("DINO_PLOT_TITLE_SCALE", "0.65"))
+PLOT_LEGEND_SCALE = float(os.environ.get("DINO_PLOT_LEGEND_SCALE", "0.5"))
+PLOT_FOOTER_SCALE = float(os.environ.get("DINO_PLOT_FOOTER_SCALE", "0.5"))
 
 def _push_hist(hist, v: float):
     hist.append(float(v))
@@ -116,12 +121,59 @@ def compute_dino_change(prev_Xn: np.ndarray, curr_Xn: np.ndarray) -> float:
     # Convert similarity [-1,1] to a "change" score where 0 means identical
     return float(1.0 - sim)
 
-def render_change_plot(h_pixel, h_dino, size_wh):
+def compute_dino_change_columnwise(
+    prev_Xn: np.ndarray,
+    curr_Xn: np.ndarray,
+    rows: int,
+    cols: int,
+    k_rows: int = 16,
+) -> float:
+    """
+    Scroll-resistant DINO change.
+    For each patch at (r,c) in the current frame, find the best cosine match among patches
+    (r+delta, c) in the previous frame for delta in [-k_rows, k_rows].
+
+    Returns: 1 - mean(best_similarity).
+    """
+    if prev_Xn is None or curr_Xn is None or prev_Xn.shape != curr_Xn.shape:
+        return float("nan")
+    if rows <= 0 or cols <= 0:
+        return float("nan")
+    if prev_Xn.shape[0] != rows * cols:
+        return float("nan")
+
+    k_rows = max(0, int(k_rows))
+    # Use torch for speed (vectorized dot products); run on same device as model if possible.
+    dev = device
+    prev = torch.from_numpy(prev_Xn).to(dev, dtype=torch.float32).reshape(rows, cols, -1)
+    curr = torch.from_numpy(curr_Xn).to(dev, dtype=torch.float32).reshape(rows, cols, -1)
+
+    best = torch.full((rows, cols), float("-inf"), device=dev, dtype=torch.float32)
+    for delta in range(-k_rows, k_rows + 1):
+        if delta >= 0:
+            # curr[r] vs prev[r+delta]
+            r_curr0, r_curr1 = 0, rows - delta
+            r_prev0, r_prev1 = delta, rows
+        else:
+            # curr[r] vs prev[r+delta]  (delta negative)
+            r_curr0, r_curr1 = -delta, rows
+            r_prev0, r_prev1 = 0, rows + delta
+
+        if r_curr1 <= r_curr0:
+            continue
+
+        sim = (curr[r_curr0:r_curr1] * prev[r_prev0:r_prev1]).sum(dim=-1)  # (overlap_rows, cols)
+        best[r_curr0:r_curr1] = torch.maximum(best[r_curr0:r_curr1], sim)
+
+    mean_best = float(best.mean().detach().cpu().item())
+    return float(1.0 - mean_best)
+
+def render_change_plot(h_pixel, h_dino, h_dino_col, size_wh):
     W, H = int(size_wh[0]), int(size_wh[1])
     img = np.zeros((H, W, 3), dtype=np.uint8)
 
     # Background + title
-    cv2.putText(img, "Change over time", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, "Change over time", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, PLOT_TITLE_SCALE, (255, 255, 255), 2, cv2.LINE_AA)
 
     # Plot area
     x0, y0 = 10, 45
@@ -151,18 +203,20 @@ def render_change_plot(h_pixel, h_dino, size_wh):
             cv2.polylines(img, [np.array(pts, dtype=np.int32)], False, color, 2)
         # Legend entry
         cv2.putText(img, label, (x0 + 8, y0 + 20 if label.endswith("pixel") else y0 + 42),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, PLOT_LEGEND_SCALE, color, 2, cv2.LINE_AA)
 
     # Pixel change is naturally [0,1]
-    _plot(h_pixel, (80, 200, 255), "pixel", y_scale_max=1.0)
+    _plot(h_pixel, (80, 200, 255), "pixel", y_scale_max=PLOT_YMAX)
     # DINO change can exceed 1 if sim goes negative; clamp display to [0,1] for readability
-    _plot(h_dino, (255, 180, 80), "dino", y_scale_max=1.0)
+    _plot(h_dino, (255, 180, 80), "dino", y_scale_max=PLOT_YMAX)
+    _plot(h_dino_col, (140, 255, 140), "dino_col", y_scale_max=PLOT_YMAX)
 
     # Latest values
     last_p = next((v for v in reversed(h_pixel) if np.isfinite(v)), float("nan"))
     last_d = next((v for v in reversed(h_dino) if np.isfinite(v)), float("nan"))
-    cv2.putText(img, f"latest: pixel={last_p:.3f}  dino={last_d:.3f}", (10, H - 6),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 220, 220), 2, cv2.LINE_AA)
+    last_dc = next((v for v in reversed(h_dino_col) if np.isfinite(v)), float("nan"))
+    cv2.putText(img, f"latest: pixel={last_p:.3f}  dino={last_d:.3f}  dino_col={last_dc:.3f}", (10, H - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, PLOT_FOOTER_SCALE, (220, 220, 220), 2, cv2.LINE_AA)
 
     return img
 
@@ -198,7 +252,7 @@ window_initialized = False
 # Screen capture settings (primary monitor by default)
 MONITOR_INDEX = int(os.environ.get("DINO_SCREEN_MONITOR", "1"))
 # Downscale factor for processing (e.g. 0.5 = half-res). Use 1.0 for native.
-SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.2"))
+SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.1"))
 
 pca_model = None
 first_frame_pca_fitted = False
@@ -237,11 +291,15 @@ with mss.mss() as sct:
         if prev_frame_proc is None or prev_Xn is None or prev_shape != curr_shape:
             pixel_change = float("nan")
             dino_change = float("nan")
+            dino_col_change = float("nan")
         else:
             pixel_change = compute_pixel_change(prev_frame_proc, frame_proc)
             dino_change = compute_dino_change(prev_Xn, Xn)
+            k_rows = int(os.environ.get("DINO_SCROLL_K", "16"))
+            dino_col_change = compute_dino_change_columnwise(prev_Xn, Xn, rows=rows, cols=cols, k_rows=k_rows)
         _push_hist(change_hist_pixel, pixel_change)
         _push_hist(change_hist_dino, dino_change)
+        _push_hist(change_hist_dino_col, dino_col_change)
 
         prev_frame_proc = frame_proc
         prev_Xn = Xn
@@ -329,7 +387,7 @@ with mss.mss() as sct:
         last_title    = add_title(last_view, "Last Selection (Grid + Red)")
         pca_title     = add_title(pca_img, "PCA Visualization")
         black_title   = add_title(np.zeros_like(frame_proc), "Empty")
-        change_plot = render_change_plot(change_hist_pixel, change_hist_dino, (Wc, Hc))
+        change_plot = render_change_plot(change_hist_pixel, change_hist_dino, change_hist_dino_col, (Wc, Hc))
         change_title = add_title(change_plot, "Change (pixel & DINO)")
 
         # --- 3x2 grid ---
