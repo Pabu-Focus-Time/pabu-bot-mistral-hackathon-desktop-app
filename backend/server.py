@@ -18,6 +18,9 @@ import base64
 import boto3
 import logging
 
+from dino_service import DinoService
+from chains import FocusChains
+
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -33,11 +36,35 @@ BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "mistral.mistral-large-2407-v1:
 desktop_connections: list[WebSocket] = []
 robot_connections: list[WebSocket] = []
 
+# Singletons (initialized in lifespan)
+dino_service = DinoService()
+focus_chains = FocusChains()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"Starting Focus Time Server on port {PORT}")
+
+    # Initialize DINOv3 image similarity service
+    try:
+        print("Loading DINOv3 model...")
+        dino_service.load_model()
+        print(f"DINOv3 model loaded on {dino_service.device}")
+    except Exception as e:
+        print(f"WARNING: DINOv3 model failed to load: {e}")
+        print("Smart analysis will fall back to always calling LLM")
+
+    # Initialize LangChain chains
+    try:
+        print("Initializing LangChain chains...")
+        focus_chains.initialize()
+        print("LangChain chains ready")
+    except Exception as e:
+        print(f"WARNING: LangChain chains failed to initialize: {e}")
+        print("Smart analysis will use rule-based fallback")
+
     yield
+
     print("Shutting down server")
 
 
@@ -596,6 +623,275 @@ async def generate_todos(request: GenerateTodosRequest):
             )
 
     return {"todos": validated_todos}
+
+
+# --- Smart Analysis Endpoint (DINOv3 pre-filter + LangChain synthesis) ---
+
+
+@app.post("/api/analyze-smart")
+async def analyze_smart(data: dict):
+    """
+    Smart focus analysis with DINOv3 pre-filter.
+
+    Flow:
+    1. Run DINOv3 similarity check on the screenshot
+    2. If screen UNCHANGED (similarity < threshold): skip LLM, return cached focus state
+    3. If screen CHANGED: run vision analysis + synthesis chain, cache result
+
+    Receives:
+    {
+        "image": "base64_string",
+        "task_context": {"task_name": str, "current_todo": str},  # optional
+        "window_data": {"app_name": str, "window_title": str},    # optional
+        "activity_data": {"idle_seconds": int, ...}               # optional
+    }
+
+    Returns:
+    {
+        "focus_state": "focused|distracted|unknown",
+        "confidence": 0.0-1.0,
+        "reason": str,
+        "content_changed": bool,
+        "similarity_score": float,
+        "analysis_source": "llm|cached|rule_based",
+        "dino_available": bool
+    }
+    """
+    image_b64 = data.get("image", "")
+    task_context = data.get("task_context")
+    window_data = data.get("window_data")
+    activity_data = data.get("activity_data")
+
+    # Log received context for debugging
+    if task_context:
+        task_name = task_context.get("task_name", "?")
+        current_todo = task_context.get("current_todo", "none")
+        todos = task_context.get("todos", [])
+        completed = sum(1 for t in todos if t.get("status") == "completed")
+        print(
+            f"[CONTEXT] Task: \"{task_name}\" | "
+            f"Current todo: \"{current_todo}\" | "
+            f"Todos: {completed}/{len(todos)} done",
+            flush=True,
+        )
+    else:
+        print("[CONTEXT] No task context received", flush=True)
+    if window_data:
+        print(
+            f"[CONTEXT] Window: {window_data.get('app_name', '?')} "
+            f"— {window_data.get('window_title', '?')[:60]}",
+            flush=True,
+        )
+    if activity_data:
+        print(
+            f"[CONTEXT] Activity: "
+            f"idle={activity_data.get('idle_seconds', 0)}s "
+            f"switches={activity_data.get('window_switch_count', 0)} "
+            f"keys={activity_data.get('keypress_count', 0)}",
+            flush=True,
+        )
+
+    if not image_b64:
+        return {
+            "focus_state": "unknown",
+            "confidence": 0.0,
+            "reason": "No image provided",
+            "content_changed": True,
+            "similarity_score": 1.0,
+            "analysis_source": "error",
+            "dino_available": dino_service.is_loaded,
+        }
+
+    # Step 1: DINOv3 similarity check (offloaded to thread to avoid blocking)
+    dino_result = {"changed": True, "similarity_score": 1.0, "is_first_frame": True}
+
+    if dino_service.is_loaded:
+        try:
+            dino_result = await asyncio.to_thread(dino_service.compare, image_b64)
+            score = dino_result.get("similarity_score", -1)
+            changed = dino_result.get("changed", True)
+            first = dino_result.get("is_first_frame", False)
+            thresh = dino_result.get("threshold", 0.15)
+            if first:
+                print(f"[DINO] First frame — no comparison yet (score=N/A)", flush=True)
+            else:
+                status = "CHANGED" if changed else "UNCHANGED"
+                print(
+                    f"[DINO] Inference OK — score={score:.4f}  "
+                    f"threshold={thresh}  status={status}",
+                    flush=True,
+                )
+        except Exception as e:
+            print(f"[DINO] ERROR — comparison failed: {e}", flush=True)
+            dino_result = {"changed": True, "similarity_score": 1.0, "is_first_frame": False}
+    else:
+        print("[DINO] Model not loaded — skipping similarity check", flush=True)
+
+    content_changed = dino_result.get("changed", True)
+    similarity_score = dino_result.get("similarity_score", 1.0)
+    is_first_frame = dino_result.get("is_first_frame", False)
+
+    # Step 2: If screen unchanged, return cached result
+    if not content_changed and not is_first_frame:
+        cached = dino_service.get_cached_focus()
+        if cached:
+            print(
+                f"[SMART] Screen unchanged — returning CACHED result: "
+                f"{cached.get('focus_state')} ({cached.get('confidence', 0)*100:.0f}%)",
+                flush=True,
+            )
+            return {
+                **cached,
+                "content_changed": False,
+                "similarity_score": similarity_score,
+                "analysis_source": "cached",
+                "dino_available": True,
+            }
+
+    # Step 3: Screen changed (or first frame / no cache) — run full analysis
+    reason_tag = "first frame" if is_first_frame else f"score={similarity_score:.4f}"
+    print(f"[SMART] Screen changed ({reason_tag}) — running LLM analysis...", flush=True)
+
+    # 3a: Vision analysis via LangChain (task-aware)
+    vision_result = None
+    if focus_chains.is_ready and focus_chains.vision_llm:
+        try:
+            vision_result = await focus_chains.analyze_vision(image_b64, task_context=task_context)
+            print(
+                f"[VISION] LangChain Pixtral result: "
+                f"{vision_result.get('focus_state')} "
+                f"({vision_result.get('confidence', 0)*100:.0f}%) "
+                f"— {vision_result.get('reason', '')[:60]}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[VISION] LangChain failed: {e}", flush=True)
+
+    # Fallback to original /api/analyze logic if LangChain vision failed
+    if vision_result is None or vision_result.get("focus_state") == "unknown":
+        if MISTRAL_API_KEY:
+            try:
+                print("[VISION] Falling back to direct Mistral API...", flush=True)
+
+                # Build task-aware vision prompt for fallback too
+                from chains import _build_vision_prompt
+                fallback_vision_prompt = _build_vision_prompt(task_context)
+
+                async with httpx.AsyncClient() as client:
+                    image_url = f"data:image/png;base64,{image_b64}"
+                    response = await client.post(
+                        "https://api.mistral.ai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "pixtral-12b-2409",
+                            "messages": [{
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": image_url}},
+                                    {
+                                        "type": "text",
+                                        "text": fallback_vision_prompt,
+                                    },
+                                ],
+                            }],
+                            "response_format": {"type": "json_object"},
+                        },
+                        timeout=60.0,
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        content = (
+                            result.get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", "{}")
+                        )
+                        vision_result = json.loads(content)
+                        print(
+                            f"[VISION] Direct Mistral result: "
+                            f"{vision_result.get('focus_state')} "
+                            f"({vision_result.get('confidence', 0)*100:.0f}%) "
+                            f"— {vision_result.get('reason', '')[:60]}",
+                            flush=True,
+                        )
+                    else:
+                        print(f"[VISION] Direct Mistral HTTP error: {response.status_code}", flush=True)
+            except Exception as e:
+                print(f"[VISION] Direct Mistral fallback failed: {e}", flush=True)
+
+    # 3b: Synthesis — combine all signals
+    analysis_source = "llm"
+
+    if focus_chains.is_ready:
+        try:
+            synthesis = await focus_chains.synthesize_focus(
+                vision_analysis=vision_result,
+                window_data=window_data,
+                activity_data=activity_data,
+                task_context=task_context,
+                content_change=dino_result,
+            )
+            print(
+                f"[SYNTHESIS] LangChain result: "
+                f"{synthesis.get('focus_state')} "
+                f"({synthesis.get('confidence', 0)*100:.0f}%) "
+                f"— {synthesis.get('reason', '')[:80]}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[SYNTHESIS] LangChain failed, using fallback: {e}", flush=True)
+            synthesis = vision_result or {
+                "focus_state": "unknown",
+                "confidence": 0.0,
+                "reason": "Analysis failed",
+            }
+            analysis_source = "rule_based"
+    else:
+        # No LangChain — use vision result directly or rule-based
+        if vision_result and vision_result.get("focus_state") != "unknown":
+            synthesis = vision_result
+            print("[SYNTHESIS] Using vision result directly (no LangChain)", flush=True)
+        else:
+            synthesis = FocusChains._rule_based_synthesis(
+                vision_result, window_data, activity_data
+            )
+            analysis_source = "rule_based"
+            print(f"[SYNTHESIS] Rule-based fallback: {synthesis.get('focus_state')}", flush=True)
+
+    # Build final result
+    final_result = {
+        "focus_state": synthesis.get("focus_state", "unknown"),
+        "confidence": synthesis.get("confidence", 0.0),
+        "reason": synthesis.get("reason", ""),
+    }
+
+    # Cache the result for next time (in case screen doesn't change)
+    dino_service.set_cached_focus(final_result)
+
+    print(
+        f"[SMART] === RESULT: {final_result['focus_state']} "
+        f"({final_result['confidence']*100:.0f}%) | "
+        f"changed={content_changed} | source={analysis_source} ===",
+        flush=True,
+    )
+
+    return {
+        **final_result,
+        "content_changed": content_changed,
+        "similarity_score": similarity_score,
+        "analysis_source": analysis_source,
+        "dino_available": dino_service.is_loaded,
+    }
+
+
+@app.post("/api/analyze-smart/reset")
+async def reset_smart_analysis():
+    """Reset DINOv3 state (e.g., when starting a new session)."""
+    dino_service.reset()
+    return {"status": "reset", "message": "DINOv3 state cleared"}
 
 
 if __name__ == "__main__":

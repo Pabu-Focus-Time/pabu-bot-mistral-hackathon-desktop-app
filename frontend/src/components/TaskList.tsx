@@ -10,7 +10,7 @@ interface TaskListProps {
   tasks: Task[];
   activeTaskId: string | null;
   currentTodoId: string | null;
-  onGenerateTodos: (taskName: string, taskDescription: string) => void;
+  onGenerateTodos: (taskName: string, taskDescription: string) => Promise<void>;
   onStartSession: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
   onNodeClick: (taskId: string, nodeId: string) => void;
@@ -28,7 +28,7 @@ const TaskList: React.FC<TaskListProps> = ({
   onToggleTodo,
 }) => {
   const handleGenerate = async (taskName: string, taskDescription: string) => {
-    onGenerateTodos(taskName, taskDescription);
+    await onGenerateTodos(taskName, taskDescription);
   };
 
   return (

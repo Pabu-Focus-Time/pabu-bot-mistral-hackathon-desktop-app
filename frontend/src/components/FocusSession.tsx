@@ -1,8 +1,8 @@
 import React from 'react';
-import { motion } from 'framer-motion';
-import { Play, Square, Clock, Target, Activity } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Play, Square, Clock, Target, Activity, RefreshCw, Minus } from 'lucide-react';
 import { tokens, getFocusColor, getFocusBg } from '../styles/tokens';
-import { FocusState, FocusDataPoint } from '../websocket';
+import { FocusState, FocusDataPoint, ContentChangeInfo } from '../websocket';
 import FocusGraph from './FocusGraph';
 
 interface FocusSessionProps {
@@ -10,6 +10,7 @@ interface FocusSessionProps {
   focusState: FocusState;
   robotFocus: FocusState;
   focusHistory: FocusDataPoint[];
+  contentChangeInfo: ContentChangeInfo;
   currentTaskName: string | null;
   currentTodoName: string | null;
   sessionDuration: number;
@@ -30,6 +31,7 @@ const FocusSession: React.FC<FocusSessionProps> = ({
   focusState,
   robotFocus,
   focusHistory,
+  contentChangeInfo,
   currentTaskName,
   currentTodoName,
   sessionDuration,
@@ -200,6 +202,8 @@ const FocusSession: React.FC<FocusSessionProps> = ({
                 }}>
                   {focusScore}%
                 </span>
+                {/* Content Change Badge */}
+                <ContentBadge contentChangeInfo={contentChangeInfo} />
               </div>
             </div>
           </div>
@@ -312,15 +316,77 @@ const FocusSession: React.FC<FocusSessionProps> = ({
         <div style={{
           padding: '0 20px 20px',
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
+          gridTemplateColumns: '1fr 1fr 1fr 1fr',
           gap: '8px',
         }}>
           <DetailChip label="Desktop" value={focusState.focus_state} state={focusState.focus_state} />
           <DetailChip label="Robot" value={robotFocus.focus_state} state={robotFocus.focus_state} />
           <DetailChip label="Confidence" value={`${focusScore}%`} />
+          <DetailChip
+            label="Source"
+            value={
+              contentChangeInfo.analysisSource === 'cached' ? 'Cached' :
+              contentChangeInfo.analysisSource === 'llm' ? 'AI' :
+              contentChangeInfo.analysisSource === 'rule_based' ? 'Rules' :
+              'N/A'
+            }
+            subtitle={
+              contentChangeInfo.dinoAvailable
+                ? `${Math.round((1 - contentChangeInfo.similarityScore) * 100)}% similar`
+                : undefined
+            }
+          />
         </div>
       </div>
     </motion.div>
+  );
+};
+
+// -- Content Change Badge --
+interface ContentBadgeProps {
+  contentChangeInfo: ContentChangeInfo;
+}
+
+const ContentBadge: React.FC<ContentBadgeProps> = ({ contentChangeInfo }) => {
+  const { contentChanged, similarityScore, dinoAvailable } = contentChangeInfo;
+
+  if (!dinoAvailable) return null;
+
+  const isChanged = contentChanged;
+  const bgColor = isChanged ? tokens.colors.accentMuted : tokens.colors.surfaceSecondary;
+  const textColor = isChanged ? tokens.colors.accent : tokens.colors.textTertiary;
+  const borderColor = isChanged ? 'rgba(82,139,255,0.25)' : tokens.colors.borderLight;
+
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={isChanged ? 'changed' : 'same'}
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.9 }}
+        transition={{ duration: 0.2 }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          padding: '2px 8px',
+          borderRadius: tokens.radius.full,
+          background: bgColor,
+          border: `1px solid ${borderColor}`,
+          fontSize: tokens.typography.fontSize.xs,
+          color: textColor,
+          fontWeight: tokens.typography.fontWeight.medium,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {isChanged ? (
+          <RefreshCw size={10} style={{ color: textColor }} />
+        ) : (
+          <Minus size={10} style={{ color: textColor }} />
+        )}
+        {isChanged ? 'Changed' : 'Same'}
+      </motion.div>
+    </AnimatePresence>
   );
 };
 
@@ -329,9 +395,10 @@ interface DetailChipProps {
   label: string;
   value: string;
   state?: string;
+  subtitle?: string;
 }
 
-const DetailChip: React.FC<DetailChipProps> = ({ label, value, state }) => {
+const DetailChip: React.FC<DetailChipProps> = ({ label, value, state, subtitle }) => {
   const stateColor = state
     ? state === 'focused'
       ? tokens.colors.success
@@ -362,6 +429,16 @@ const DetailChip: React.FC<DetailChipProps> = ({ label, value, state }) => {
       }}>
         {value}
       </div>
+      {subtitle && (
+        <div style={{
+          fontSize: tokens.typography.fontSize.xs,
+          color: tokens.colors.textTertiary,
+          marginTop: '2px',
+          fontFamily: tokens.typography.fontMono,
+        }}>
+          {subtitle}
+        </div>
+      )}
     </div>
   );
 };

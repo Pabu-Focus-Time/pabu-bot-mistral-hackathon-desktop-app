@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { captureAndAnalyze } from './screenshot';
+import { captureAndAnalyzeSmart, SmartAnalysisResult } from './screenshot';
 import { startDataCollection, stopDataCollection, collectFocusData, WindowData, ActivityData } from './dataCollector';
 
 export interface FocusState {
@@ -8,6 +8,13 @@ export interface FocusState {
   reason: string | Record<string, unknown>;
   timestamp?: string;
   source?: 'desktop' | 'robot';
+}
+
+export interface ContentChangeInfo {
+  contentChanged: boolean;
+  similarityScore: number;
+  analysisSource: 'llm' | 'cached' | 'rule_based' | 'error';
+  dinoAvailable: boolean;
 }
 
 export interface FocusDataPoint {
@@ -43,13 +50,29 @@ export function useFocusDetection() {
     source: 'robot',
   });
   const [focusHistory, setFocusHistory] = useState<FocusDataPoint[]>([]);
+  const [contentChangeInfo, setContentChangeInfo] = useState<ContentChangeInfo>({
+    contentChanged: true,
+    similarityScore: 1.0,
+    analysisSource: 'llm',
+    dinoAvailable: false,
+  });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [screenshotInterval, setScreenshotInterval] = useState<number | null>(null);
   const [autoDetect, setAutoDetect] = useState(true);
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [showDistraction, setShowDistraction] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const sessionStartRef = useRef<number | null>(null);
+  const prevFocusStateRef = useRef<string>('unknown');
+  const taskContextRef = useRef<{
+    task_name: string;
+    task_description: string;
+    current_todo: string;
+    todos: Array<{ title: string; status: string }>;
+    completed_count: number;
+    total_count: number;
+  } | null>(null);
 
   const addFocusDataPoint = useCallback((state: FocusState) => {
     if (sessionStartRef.current === null) return;
@@ -162,13 +185,56 @@ export function useFocusDetection() {
     });
   }, [sendMessage]);
 
+  const setTaskContext = useCallback((
+    task: { name: string; description: string; todos: Array<{ title: string; status: string }> } | null,
+    currentTodo?: string | null,
+  ) => {
+    if (task) {
+      const completed = task.todos.filter(t => t.status === 'completed').length;
+      taskContextRef.current = {
+        task_name: task.name,
+        task_description: task.description,
+        current_todo: currentTodo || task.todos.find(t => t.status !== 'completed')?.title || '',
+        todos: task.todos.map(t => ({ title: t.title, status: t.status })),
+        completed_count: completed,
+        total_count: task.todos.length,
+      };
+    } else {
+      taskContextRef.current = null;
+    }
+  }, []);
+
+  const dismissDistraction = useCallback(() => {
+    setShowDistraction(false);
+  }, []);
+
   const analyzeScreenshot = useCallback(async () => {
     if (isAnalyzing) return;
     
     setIsAnalyzing(true);
     setPermissionError(null);
     try {
-      const result = await captureAndAnalyze(API_BASE);
+      // Collect window/activity data first for the smart endpoint
+      const focusData = await collectFocusData();
+
+      const windowPayload = focusData.window ? {
+        app_name: focusData.window.appName || '',
+        window_title: focusData.window.windowTitle || '',
+      } : null;
+
+      const activityPayload = focusData.activity ? {
+        idle_seconds: focusData.activity.idleSeconds || 0,
+        window_switch_count: focusData.activity.windowSwitchCount || 0,
+        keypress_count: focusData.activity.keypressCount || 0,
+      } : null;
+
+      // Use the smart endpoint with DINOv3 pre-filter
+      const result = await captureAndAnalyzeSmart(
+        API_BASE,
+        taskContextRef.current,
+        windowPayload,
+        activityPayload,
+      );
       
       if (!result) {
         setIsAnalyzing(false);
@@ -185,7 +251,13 @@ export function useFocusDetection() {
         return;
       }
 
-      const focusData = await collectFocusData();
+      // Update content change info
+      setContentChangeInfo({
+        contentChanged: result.content_changed,
+        similarityScore: result.similarity_score,
+        analysisSource: result.analysis_source,
+        dinoAvailable: result.dino_available,
+      });
 
       const focusState: FocusState = {
         focus_state: result.focus_state as 'focused' | 'distracted' | 'unknown',
@@ -198,17 +270,27 @@ export function useFocusDetection() {
       setDesktopFocus(focusState);
       addFocusDataPoint(focusState);
       
+      // Detect focus→distracted transition for toast notification
+      const prevState = prevFocusStateRef.current;
+      if (
+        focusState.focus_state === 'distracted' &&
+        prevState !== 'distracted'
+      ) {
+        setShowDistraction(true);
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => setShowDistraction(false), 5000);
+      }
+      prevFocusStateRef.current = focusState.focus_state;
+
       sendMessage({
         type: 'focus_update',
         source: 'desktop',
         timestamp: new Date().toISOString(),
         payload: {
           ...focusState,
-          vision_analysis: {
-            focus_state: result.focus_state,
-            confidence: result.confidence,
-            reason: result.reason,
-          },
+          content_changed: result.content_changed,
+          similarity_score: result.similarity_score,
+          analysis_source: result.analysis_source,
           window_data: focusData.window,
           activity_data: focusData.activity,
         },
@@ -227,6 +309,8 @@ export function useFocusDetection() {
   const startAutoDetection = useCallback(() => {
     if (screenshotInterval) return;
     startSession();
+    // Reset DINOv3 state for fresh session
+    fetch(`${API_BASE}/api/analyze-smart/reset`, { method: 'POST' }).catch(() => {});
     const interval = window.setInterval(analyzeScreenshot, SCREENSHOT_INTERVAL);
     setScreenshotInterval(interval);
     setAutoDetect(true);
@@ -265,6 +349,8 @@ export function useFocusDetection() {
     desktopFocus,
     robotFocus,
     focusHistory,
+    contentChangeInfo,
+    showDistraction,
     isAnalyzing,
     autoDetect,
     permissionError,
@@ -272,6 +358,8 @@ export function useFocusDetection() {
     startAutoDetection,
     stopAutoDetection,
     clearFocusHistory,
+    setTaskContext,
+    dismissDistraction,
     connect,
     disconnect,
     openSystemPreferences,

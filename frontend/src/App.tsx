@@ -5,7 +5,7 @@ import TaskList from './components/TaskList';
 import FocusSession from './components/FocusSession';
 import { Task, createTask, createTodoNode } from './types/tasks';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Target, Clock, Zap, Brain, Activity, Wifi, WifiOff, AlertTriangle, Settings } from 'lucide-react';
+import { Target, Clock, Zap, Brain, Activity, Wifi, WifiOff, AlertTriangle, Settings, X } from 'lucide-react';
 
 const App: React.FC = () => {
   const {
@@ -13,10 +13,14 @@ const App: React.FC = () => {
     desktopFocus,
     robotFocus,
     focusHistory,
+    contentChangeInfo,
+    showDistraction,
     permissionError,
     startAutoDetection,
     stopAutoDetection,
     clearFocusHistory,
+    setTaskContext,
+    dismissDistraction,
     openSystemPreferences,
   } = useFocusDetection();
 
@@ -103,28 +107,48 @@ const App: React.FC = () => {
   };
 
   const handleToggleTodo = (taskId: string, todoId: string) => {
-    setTasks(prev => prev.map(task => {
-      if (task.id !== taskId) return task;
-      return {
-        ...task,
-        todos: task.todos.map(todo =>
-          todo.id === todoId
-            ? { ...todo, status: todo.status === 'completed' ? 'pending' as const : 'completed' as const }
-            : todo
-        ),
-      };
-    }));
+    setTasks(prev => {
+      const updated = prev.map(task => {
+        if (task.id !== taskId) return task;
+        return {
+          ...task,
+          todos: task.todos.map(todo =>
+            todo.id === todoId
+              ? { ...todo, status: todo.status === 'completed' ? 'pending' as const : 'completed' as const }
+              : todo
+          ),
+        };
+      });
+
+      // Re-sync task context if this is the active task
+      if (taskId === activeTaskId) {
+        const activeTask = updated.find(t => t.id === taskId);
+        if (activeTask) {
+          const currentTodo = currentTodoId
+            ? activeTask.todos.find(t => t.id === currentTodoId)?.title
+            : undefined;
+          setTaskContext(activeTask, currentTodo);
+        }
+      }
+
+      return updated;
+    });
   };
 
   const handleStartSession = (taskId: string) => {
     setActiveTaskId(taskId);
     setSessionDuration(0);
+    const task = tasks.find(t => t.id === taskId);
+    if (task) {
+      setTaskContext(task);
+    }
     startAutoDetection();
   };
 
   const handleStopSession = () => {
     setActiveTaskId(null);
     setCurrentTodoId(null);
+    setTaskContext(null);
     stopAutoDetection();
     clearFocusHistory();
   };
@@ -132,6 +156,12 @@ const App: React.FC = () => {
   const handleNodeClick = (taskId: string, nodeId: string) => {
     if (taskId === activeTaskId) {
       setCurrentTodoId(nodeId);
+      // Update task context with the newly selected todo
+      const task = tasks.find(t => t.id === taskId);
+      if (task) {
+        const todoTitle = task.todos.find(t => t.id === nodeId)?.title;
+        setTaskContext(task, todoTitle);
+      }
     }
   };
 
@@ -359,6 +389,7 @@ const App: React.FC = () => {
               focusState={desktopFocus}
               robotFocus={robotFocus}
               focusHistory={focusHistory}
+              contentChangeInfo={contentChangeInfo}
               currentTaskName={activeTask?.name || null}
               currentTodoName={currentTodoId ? 'Selected task' : null}
               sessionDuration={sessionDuration}
@@ -418,6 +449,116 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Distraction Toast Notification — App-level overlay */}
+      <AnimatePresence>
+        {showDistraction && activeTask && (
+          <motion.div
+            initial={{ opacity: 0, x: 60, y: 0 }}
+            animate={{ opacity: 1, x: 0, y: 0 }}
+            exit={{ opacity: 0, x: 60 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            style={{
+              position: 'fixed',
+              top: '20px',
+              right: '20px',
+              zIndex: 9999,
+              maxWidth: '340px',
+              background: tokens.colors.surface,
+              borderRadius: tokens.radius.lg,
+              border: `1px solid rgba(240, 180, 41, 0.25)`,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2)',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Warm accent bar */}
+            <div style={{
+              height: '2px',
+              background: `linear-gradient(90deg, ${tokens.colors.warning}, ${tokens.colors.danger})`,
+            }} />
+
+            <div style={{
+              padding: '14px 16px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '12px',
+            }}>
+              {/* Warning icon */}
+              <div style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: tokens.radius.md,
+                background: tokens.colors.warningMuted,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <AlertTriangle size={16} style={{ color: tokens.colors.warning }} />
+              </div>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: tokens.typography.fontSize.sm,
+                  fontWeight: tokens.typography.fontWeight.semibold,
+                  color: tokens.colors.text,
+                  marginBottom: '3px',
+                }}>
+                  You seem distracted
+                </div>
+                <div style={{
+                  fontSize: tokens.typography.fontSize.xs,
+                  color: tokens.colors.textSecondary,
+                  lineHeight: tokens.typography.lineHeight.normal,
+                }}>
+                  Get back to <span style={{
+                    color: tokens.colors.accent,
+                    fontWeight: tokens.typography.fontWeight.medium,
+                  }}>
+                    {activeTask.name}
+                  </span>
+                </div>
+              </div>
+
+              {/* Dismiss button */}
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={dismissDistraction}
+                style={{
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: tokens.radius.sm,
+                  background: 'transparent',
+                  border: 'none',
+                  color: tokens.colors.textTertiary,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  padding: 0,
+                }}
+              >
+                <X size={14} />
+              </motion.button>
+            </div>
+
+            {/* Auto-dismiss progress bar */}
+            <motion.div
+              initial={{ scaleX: 1 }}
+              animate={{ scaleX: 0 }}
+              transition={{ duration: 5, ease: 'linear' }}
+              style={{
+                height: '2px',
+                background: tokens.colors.warning,
+                transformOrigin: 'left',
+                opacity: 0.4,
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

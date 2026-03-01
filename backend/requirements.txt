@@ -5,3 +5,16 @@ httpx
 python-dotenv
 Pillow
 boto3
+
+# DINOv3 image similarity
+torch
+torchvision
+numpy>=1.26.4,<3
+opencv-python
+transformers @ git+https://github.com/huggingface/transformers.git
+
+# LangChain (minimal integration)
+langchain-core
+langchain-aws
+langchain-mistralai
+langchain
