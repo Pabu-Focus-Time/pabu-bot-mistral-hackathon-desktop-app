@@ -13,6 +13,11 @@ API_BASE = f"http://{HOST}:{PORT}"
 # Mode settings
 SIMULATION = os.getenv("SIMULATION_MODE", "true").lower() == "true"
 
+# ElevenLabs Conversational AI
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_9801kjk2p0kkf5wsrq1cc2byvyqx")
+VOICE_AGENT_ENABLED = os.getenv("VOICE_AGENT_ENABLED", "false").lower() == "true"
+
 # Focus detection settings
 FRAME_INTERVAL = float(os.getenv("FRAME_INTERVAL", "3.0"))
 IMAGE_SIMILARITY_THRESHOLD = float(os.getenv("IMAGE_SIMILARITY_THRESHOLD", "0.95"))

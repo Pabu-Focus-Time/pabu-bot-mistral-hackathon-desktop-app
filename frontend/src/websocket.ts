@@ -5,7 +5,7 @@ import { startDataCollection, stopDataCollection, collectFocusData, WindowData, 
 export interface FocusState {
   focus_state: 'focused' | 'distracted' | 'unknown';
   confidence: number;
-  reason: string | Record<string, unknown>;
+  reason: unknown;
   timestamp?: string;
   source?: 'desktop' | 'robot';
 }
@@ -191,28 +191,14 @@ export function useFocusDetection() {
     });
   }, [sendMessage]);
 
-  const setTaskContext = useCallback((
-    task: { name: string; description: string; todos: Array<{ title: string; status: string }> } | null,
-    currentTodo?: string | null,
-  ) => {
-    if (task) {
-      const completed = task.todos.filter(t => t.status === 'completed').length;
-      taskContextRef.current = {
-        task_name: task.name,
-        task_description: task.description,
-        current_todo: currentTodo || task.todos.find(t => t.status !== 'completed')?.title || '',
-        todos: task.todos.map(t => ({ title: t.title, status: t.status })),
-        completed_count: completed,
-        total_count: task.todos.length,
-      };
-    } else {
-      taskContextRef.current = null;
-    }
-  }, []);
-
-  const dismissDistraction = useCallback(() => {
-    setShowDistraction(false);
-  }, []);
+  const sendVoiceEvent = useCallback((event: string, text: string) => {
+    sendMessage({
+      type: 'voice_event',
+      source: 'desktop',
+      timestamp: new Date().toISOString(),
+      payload: { event, text },
+    });
+  }, [sendMessage]);
 
   const analyzeScreenshot = useCallback(async () => {
     if (isAnalyzing) return;
@@ -361,6 +347,7 @@ export function useFocusDetection() {
     autoDetect,
     permissionError,
     sendReaction,
+    sendVoiceEvent,
     startAutoDetection,
     stopAutoDetection,
     clearFocusHistory,
