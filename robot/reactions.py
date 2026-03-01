@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from typing import Optional
 
 import config
@@ -111,6 +112,28 @@ class Reactions:
         await self.shake_head(times=2)
         await self.look_away(duration=3.0)
     
+    async def talking_bobble(self, duration: float = 3.0, speed: float = 0.25):
+        """Subtle head bobble to simulate talking — small random pitch/yaw movements.
+        Runs for `duration` seconds total."""
+        elapsed = 0.0
+        while elapsed < duration:
+            pitch = random.uniform(-5, 8)
+            yaw = random.uniform(-6, 6)
+            roll = random.uniform(-3, 3)
+            self.motors.goto_head(pitch=pitch, roll=roll, yaw=yaw, duration=speed)
+            await asyncio.sleep(speed)
+            elapsed += speed
+        # Return to center
+        self.motors.goto_head(pitch=0, roll=0, yaw=0, duration=0.3)
+        await asyncio.sleep(0.3)
+
+    async def distraction(self):
+        """Distraction reaction: uh_oh antenna + tilt head"""
+        await asyncio.gather(
+            self.antenna_uh_oh(times=1, speed=0.3),
+            self.tilt_head(angle=20, duration=0.4),
+        )
+
     async def focused(self):
         """Reaction when user is focused"""
         await self.nod(times=1)
@@ -123,6 +146,7 @@ class Reactions:
             "none": lambda: asyncio.sleep(0),
             "greeting": self.greeting,
             "warning": self.warning,
+            "distraction": self.distraction,
             "scold": self.scold,
             "focused": self.focused,
             "look_away": self.look_away,
@@ -147,11 +171,20 @@ class ReactionsWithAudio(Reactions):
         self.speaker = speaker
     
     async def play_and_react(self, text: str, reaction: str):
-        """Play TTS audio and execute reaction"""
+        """Play TTS audio with talking bobble, then execute reaction movement."""
         if text:
+            # Start TTS (non-blocking) and talking bobble concurrently
             self.speaker.play_tts(text)
+            # Estimate speech duration: ~120ms per character is a rough heuristic
+            speech_duration = max(1.5, len(text) * 0.06)
+            await self.talking_bobble(duration=speech_duration, speed=0.25)
         
+        # After speaking, perform the reaction movement
         await self.execute_reaction(reaction)
+    
+    async def distraction_with_voice(self, text: str = "Hey! You should focus on your task!"):
+        """Distraction with voice: uh_oh antenna + talking bobble + TTS"""
+        await self.play_and_react(text, "distraction")
     
     async def warning_with_voice(self, text: str = "Hey, you should focus on your task!"):
         """Warning with voice"""

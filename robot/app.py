@@ -136,9 +136,15 @@ class FocusTimeRobot:
         
         # React based on focus state
         if focus_state == "distracted":
-            await self.reaction_handler.warning_with_voice(
-                "Hey! You should focus on your task!"
-            )
+            text = "Hey! You seem distracted. Let's get back to work!"
+            if self._task_context:
+                task_name = self._task_context.get("task_name")
+                current_todo = self._task_context.get("current_todo")
+                if current_todo:
+                    text = f"Hey! You should be working on {current_todo}. Let's stay focused!"
+                elif task_name:
+                    text = f"Hey! You should be focusing on {task_name}. Come on, let's go!"
+            await self.reaction_handler.distraction_with_voice(text)
         elif focus_state == "focused":
             await self.reaction_handler.focused()
     

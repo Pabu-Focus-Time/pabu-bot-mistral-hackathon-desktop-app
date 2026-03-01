@@ -372,7 +372,15 @@ const setTaskContext = useCallback((
         });
 
         if (focusState.focus_state === 'distracted') {
-          sendReaction('warning', 'Desktop detected distraction!');
+          const taskName = taskContextRef.current?.task_name;
+          const currentTodo = taskContextRef.current?.current_todo;
+          let robotText = 'Hey! You seem distracted. Let\'s get back to work!';
+          if (taskName && currentTodo) {
+            robotText = `Hey! You should be working on ${currentTodo}. Let's stay focused!`;
+          } else if (taskName) {
+            robotText = `Hey! You should be focusing on ${taskName}. Come on, let's go!`;
+          }
+          sendReaction('distraction', robotText);
         }
       }
     } catch (error) {
