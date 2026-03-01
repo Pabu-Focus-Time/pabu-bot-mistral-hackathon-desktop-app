@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { captureAndAnalyze } from './screenshot';
+import { startDataCollection, stopDataCollection, collectFocusData, WindowData, ActivityData } from './dataCollector';
 
 export interface FocusState {
   focus_state: 'focused' | 'distracted' | 'unknown';
@@ -153,6 +154,9 @@ export function useFocusDetection() {
         return;
       }
 
+      // Get window and activity data
+      const focusData = await collectFocusData();
+
       const focusState: FocusState = {
         focus_state: result.focus_state as 'focused' | 'distracted' | 'unknown',
         confidence: result.confidence,
@@ -162,7 +166,23 @@ export function useFocusDetection() {
       };
       
       setDesktopFocus(focusState);
-      sendFocusUpdate(focusState);
+      
+      // Send combined data to backend
+      sendMessage({
+        type: 'focus_update',
+        source: 'desktop',
+        timestamp: new Date().toISOString(),
+        payload: {
+          ...focusState,
+          vision_analysis: {
+            focus_state: result.focus_state,
+            confidence: result.confidence,
+            reason: result.reason,
+          },
+          window_data: focusData.window,
+          activity_data: focusData.activity,
+        },
+      });
       
       if (focusState.focus_state === 'distracted') {
         sendReaction('warning', 'Desktop detected distraction!');
@@ -172,7 +192,7 @@ export function useFocusDetection() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [isAnalyzing, sendFocusUpdate, sendReaction]);
+  }, [isAnalyzing, sendFocusUpdate, sendReaction, sendMessage]);
 
   const startAutoDetection = useCallback(() => {
     if (screenshotInterval) return;
@@ -191,10 +211,12 @@ export function useFocusDetection() {
   }, [screenshotInterval]);
 
   useEffect(() => {
+    startDataCollection();
     connect();
     startAutoDetection();
     return () => {
       stopAutoDetection();
+      stopDataCollection();
       disconnect();
     };
   }, []);
