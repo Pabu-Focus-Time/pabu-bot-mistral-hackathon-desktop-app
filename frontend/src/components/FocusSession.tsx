@@ -48,7 +48,14 @@ const FocusSession: React.FC<FocusSessionProps> = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const focusScore = Math.round(focusState.confidence * 100);
+  // Focus score: high = good. When distracted, invert confidence so it shows LOW.
+  // e.g., "distracted at 95% confidence" → focus score = 5%
+  const rawConfidence = focusState.confidence;
+  const focusScore = focusState.focus_state === 'distracted'
+    ? Math.round((1 - rawConfidence) * 100)
+    : focusState.focus_state === 'focused'
+    ? Math.round(rawConfidence * 100)
+    : Math.round(rawConfidence * 50); // unknown → mid-range
   const stateColor = getFocusColor(focusState.focus_state);
 
   // Not active state - compact start button

@@ -78,9 +78,15 @@ export function useFocusDetection() {
     if (sessionStartRef.current === null) return;
     
     const elapsed = Math.floor((Date.now() - sessionStartRef.current) / 1000);
+    // Focus score: high = good. Invert when distracted.
+    const score = state.focus_state === 'distracted'
+      ? Math.round((1 - state.confidence) * 100)
+      : state.focus_state === 'focused'
+      ? Math.round(state.confidence * 100)
+      : Math.round(state.confidence * 50);
     const point: FocusDataPoint = {
       time: elapsed,
-      score: Math.round(state.confidence * 100),
+      score,
       state: state.focus_state,
       timestamp: new Date().toISOString(),
     };
@@ -277,8 +283,8 @@ export function useFocusDetection() {
         prevState !== 'distracted'
       ) {
         setShowDistraction(true);
-        // Auto-dismiss after 5 seconds
-        setTimeout(() => setShowDistraction(false), 5000);
+        // Auto-dismiss after 10 seconds
+        setTimeout(() => setShowDistraction(false), 10000);
       }
       prevFocusStateRef.current = focusState.focus_state;
 

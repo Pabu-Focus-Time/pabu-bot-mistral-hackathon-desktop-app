@@ -170,7 +170,7 @@ async def analyze_image(image_data: dict):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "pixtral-12b-2409",
+                    "model": "pixtral-large-latest",
                     "messages": [
                         {
                             "role": "user",
@@ -707,7 +707,7 @@ async def analyze_smart(data: dict):
 
     if dino_service.is_loaded:
         try:
-            dino_result = await asyncio.to_thread(dino_service.compare, image_b64)
+            dino_result = await asyncio.to_thread(dino_service.compare, image_b64, "desktop")
             score = dino_result.get("similarity_score", -1)
             changed = dino_result.get("changed", True)
             first = dino_result.get("is_first_frame", False)
@@ -733,7 +733,7 @@ async def analyze_smart(data: dict):
 
     # Step 2: If screen unchanged, return cached result
     if not content_changed and not is_first_frame:
-        cached = dino_service.get_cached_focus()
+        cached = dino_service.get_cached_focus("desktop")
         if cached:
             print(
                 f"[SMART] Screen unchanged — returning CACHED result: "
@@ -786,7 +786,7 @@ async def analyze_smart(data: dict):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "pixtral-12b-2409",
+                            "model": "pixtral-large-latest",
                             "messages": [{
                                 "role": "user",
                                 "content": [
@@ -869,7 +869,7 @@ async def analyze_smart(data: dict):
     }
 
     # Cache the result for next time (in case screen doesn't change)
-    dino_service.set_cached_focus(final_result)
+    dino_service.set_cached_focus(final_result, "desktop")
 
     print(
         f"[SMART] === RESULT: {final_result['focus_state']} "
@@ -889,9 +889,272 @@ async def analyze_smart(data: dict):
 
 @app.post("/api/analyze-smart/reset")
 async def reset_smart_analysis():
-    """Reset DINOv3 state (e.g., when starting a new session)."""
-    dino_service.reset()
-    return {"status": "reset", "message": "DINOv3 state cleared"}
+    """Reset DINOv3 state for desktop channel (e.g., when starting a new session)."""
+    dino_service.reset("desktop")
+    return {"status": "reset", "message": "DINOv3 desktop state cleared"}
+
+
+# --- Robot Camera Analysis Endpoint ---
+
+
+@app.post("/api/analyze-robot")
+async def analyze_robot(data: dict):
+    """
+    Analyze a robot camera frame for physical distraction.
+
+    The robot's camera watches the user at their desk. This endpoint detects:
+    - Phone usage (holding, scrolling, looking at phone)
+    - Looking away from the laptop
+    - Not engaged with work (sleeping, eating, talking, daydreaming)
+    - General body language indicating distraction
+
+    Uses DINOv3 pre-filter (robot channel) + Pixtral Large vision analysis.
+    Results are also broadcast to desktop clients via WebSocket.
+
+    Receives:
+    {
+        "image": "base64_string"
+    }
+
+    Returns:
+    {
+        "focus_state": "focused|distracted|unknown",
+        "confidence": 0.0-1.0,
+        "reason": str,
+        "content_changed": bool,
+        "similarity_score": float,
+        "analysis_source": "ai|cached|fallback",
+        "dino_available": bool
+    }
+    """
+    image_b64 = data.get("image", "")
+
+    if not image_b64:
+        return {
+            "focus_state": "unknown",
+            "confidence": 0.0,
+            "reason": "No image provided",
+            "content_changed": True,
+            "similarity_score": 1.0,
+            "analysis_source": "error",
+            "dino_available": dino_service.is_loaded,
+        }
+
+    # Step 1: DINOv3 similarity check (robot channel)
+    dino_result = {"changed": True, "similarity_score": 1.0, "is_first_frame": True}
+
+    if dino_service.is_loaded:
+        try:
+            dino_result = await asyncio.to_thread(
+                dino_service.compare, image_b64, "robot"
+            )
+            score = dino_result.get("similarity_score", -1)
+            changed = dino_result.get("changed", True)
+            first = dino_result.get("is_first_frame", False)
+            thresh = dino_result.get("threshold", 0.10)
+            if first:
+                print(
+                    f"[ROBOT-DINO] First frame — no comparison yet",
+                    flush=True,
+                )
+            else:
+                status = "CHANGED" if changed else "UNCHANGED"
+                print(
+                    f"[ROBOT-DINO] score={score:.4f}  "
+                    f"threshold={thresh}  status={status}",
+                    flush=True,
+                )
+        except Exception as e:
+            print(f"[ROBOT-DINO] ERROR: {e}", flush=True)
+            dino_result = {
+                "changed": True,
+                "similarity_score": 1.0,
+                "is_first_frame": False,
+            }
+    else:
+        print("[ROBOT-DINO] Model not loaded — skipping", flush=True)
+
+    content_changed = dino_result.get("changed", True)
+    similarity_score = dino_result.get("similarity_score", 1.0)
+    is_first_frame = dino_result.get("is_first_frame", False)
+
+    # Step 2: If scene unchanged, return cached result
+    if not content_changed and not is_first_frame:
+        cached = dino_service.get_cached_focus("robot")
+        if cached:
+            print(
+                f"[ROBOT] Scene unchanged — returning CACHED: "
+                f"{cached.get('focus_state')} ({cached.get('confidence', 0)*100:.0f}%)",
+                flush=True,
+            )
+            return {
+                **cached,
+                "content_changed": False,
+                "similarity_score": similarity_score,
+                "analysis_source": "cached",
+                "dino_available": True,
+            }
+
+    # Step 3: Scene changed — run Pixtral Large robot vision analysis
+    reason_tag = "first frame" if is_first_frame else f"score={similarity_score:.4f}"
+    print(
+        f"[ROBOT] Scene changed ({reason_tag}) — running vision analysis...",
+        flush=True,
+    )
+
+    vision_result = None
+    analysis_source = "ai"
+
+    # 3a: Try LangChain robot vision (Pixtral Large)
+    if focus_chains.is_ready and focus_chains.vision_llm:
+        try:
+            vision_result = await focus_chains.analyze_robot_vision(image_b64)
+            print(
+                f"[ROBOT-VISION] Pixtral result: "
+                f"{vision_result.get('focus_state')} "
+                f"({vision_result.get('confidence', 0)*100:.0f}%) "
+                f"— {vision_result.get('reason', '')[:80]}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[ROBOT-VISION] LangChain failed: {e}", flush=True)
+
+    # 3b: Fallback to direct Mistral API if LangChain failed
+    if vision_result is None or vision_result.get("focus_state") == "unknown":
+        if MISTRAL_API_KEY:
+            try:
+                print(
+                    "[ROBOT-VISION] Falling back to direct Mistral API...",
+                    flush=True,
+                )
+                from chains import ROBOT_VISION_PROMPT
+
+                async with httpx.AsyncClient() as client:
+                    image_url = f"data:image/jpeg;base64,{image_b64}"
+                    response = await client.post(
+                        "https://api.mistral.ai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "pixtral-large-latest",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {"url": image_url},
+                                        },
+                                        {
+                                            "type": "text",
+                                            "text": ROBOT_VISION_PROMPT,
+                                        },
+                                    ],
+                                }
+                            ],
+                            "response_format": {"type": "json_object"},
+                        },
+                        timeout=60.0,
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        content = (
+                            result.get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", "{}")
+                        )
+                        vision_result = json.loads(content)
+                        print(
+                            f"[ROBOT-VISION] Direct Mistral result: "
+                            f"{vision_result.get('focus_state')} "
+                            f"({vision_result.get('confidence', 0)*100:.0f}%) "
+                            f"— {vision_result.get('reason', '')[:80]}",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"[ROBOT-VISION] Direct Mistral HTTP error: "
+                            f"{response.status_code}",
+                            flush=True,
+                        )
+            except Exception as e:
+                print(
+                    f"[ROBOT-VISION] Direct Mistral fallback failed: {e}",
+                    flush=True,
+                )
+
+    # Step 4: Build final result
+    if vision_result and vision_result.get("focus_state") != "unknown":
+        final_result = {
+            "focus_state": vision_result.get("focus_state", "unknown"),
+            "confidence": vision_result.get("confidence", 0.0),
+            "reason": vision_result.get("reason", ""),
+        }
+    else:
+        final_result = {
+            "focus_state": "unknown",
+            "confidence": 0.0,
+            "reason": "Could not analyze robot camera image",
+        }
+        analysis_source = "fallback"
+
+    # Cache the result for next time
+    dino_service.set_cached_focus(final_result, "robot")
+
+    print(
+        f"[ROBOT] === RESULT: {final_result['focus_state']} "
+        f"({final_result['confidence']*100:.0f}%) | "
+        f"changed={content_changed} | source={analysis_source} ===",
+        flush=True,
+    )
+
+    # Step 5: Broadcast result to desktop clients via WebSocket
+    if final_result["focus_state"] != "unknown":
+        robot_message = {
+            "type": "robot_focus_update",
+            "source": "server",
+            "timestamp": datetime.utcnow().isoformat(),
+            "payload": {
+                "focus_state": final_result["focus_state"],
+                "confidence": final_result["confidence"],
+                "reason": final_result["reason"],
+                "content_changed": content_changed,
+                "similarity_score": similarity_score,
+                "analysis_source": analysis_source,
+            },
+        }
+        disconnected = []
+        for desktop_ws in desktop_connections:
+            try:
+                await desktop_ws.send_json(robot_message)
+            except Exception:
+                disconnected.append(desktop_ws)
+        for ws in disconnected:
+            desktop_connections.remove(ws)
+
+        if desktop_connections:
+            print(
+                f"[ROBOT] Broadcast to {len(desktop_connections)} desktop client(s)",
+                flush=True,
+            )
+
+    return {
+        **final_result,
+        "content_changed": content_changed,
+        "similarity_score": similarity_score,
+        "analysis_source": analysis_source,
+        "dino_available": dino_service.is_loaded,
+    }
+
+
+@app.post("/api/analyze-robot/reset")
+async def reset_robot_analysis():
+    """Reset DINOv3 state for robot channel."""
+    dino_service.reset("robot")
+    return {"status": "reset", "message": "DINOv3 robot state cleared"}
 
 
 if __name__ == "__main__":

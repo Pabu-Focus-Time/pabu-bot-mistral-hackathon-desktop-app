@@ -176,7 +176,12 @@ const App: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const focusScore = Math.round(desktopFocus.confidence * 100);
+  // Focus score: high = good. Invert when distracted.
+  const focusScore = desktopFocus.focus_state === 'distracted'
+    ? Math.round((1 - desktopFocus.confidence) * 100)
+    : desktopFocus.focus_state === 'focused'
+    ? Math.round(desktopFocus.confidence * 100)
+    : Math.round(desktopFocus.confidence * 50);
 
   return (
     <div style={{
@@ -548,7 +553,7 @@ const App: React.FC = () => {
             <motion.div
               initial={{ scaleX: 1 }}
               animate={{ scaleX: 0 }}
-              transition={{ duration: 5, ease: 'linear' }}
+              transition={{ duration: 10, ease: 'linear' }}
               style={{
                 height: '2px',
                 background: tokens.colors.warning,

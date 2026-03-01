@@ -32,7 +32,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.5"))
 TOKEN_STRIDE_PREFER = int(os.environ.get("DINO_TOKEN_STRIDE_PREFER", "16"))
 SCROLL_K = int(os.environ.get("DINO_SCROLL_K", "16"))
-CHANGE_THRESHOLD = float(os.environ.get("DINO_TRIGGER_THRESH", "0.15"))
+CHANGE_THRESHOLD = float(os.environ.get("DINO_TRIGGER_THRESH", "0.10"))
 
 
 # ── Core Functions (from screen_change_trigger.py) ────────────────────────────
@@ -139,21 +139,27 @@ class DinoService:
     """
     Thread-safe singleton service for DINOv3 image similarity.
 
+    Supports multiple channels (e.g., "desktop", "robot") so each source
+    maintains its own cached embeddings and focus state independently.
+
     Usage:
         service = DinoService()
         service.load_model()  # Call once at startup
-        result = service.compare(base64_image_string)
-        # result = {"changed": True, "similarity_score": 0.23, "is_first_frame": False}
+        result = service.compare(base64_image_string, channel="desktop")
+        result = service.compare(base64_image_string, channel="robot")
     """
+
+    DEFAULT_CHANNEL = "desktop"
 
     def __init__(self):
         self.model = None
         self.device = None
-        self._prev_Xn = None
-        self._prev_shape = None  # (rows, cols, stride)
+        # Per-channel state: {channel: value}
+        self._prev_Xn: dict = {}
+        self._prev_shape: dict = {}  # {channel: (rows, cols, stride)}
+        self._cached_focus_state: dict = {}  # {channel: dict}
         self._lock = threading.Lock()
         self._loaded = False
-        self._cached_focus_state = None  # Cache last LLM result for unchanged screens
 
     def load_model(self) -> None:
         """Load the DINOv3 model. Call once at server startup."""
@@ -245,9 +251,14 @@ class DinoService:
 
         return _preprocess(np.ascontiguousarray(img_crop, dtype=np.uint8), self.device)
 
-    def compare(self, image_b64: str) -> dict:
+    def compare(self, image_b64: str, channel: str = None) -> dict:
         """
-        Compare a base64-encoded screenshot against the previous one.
+        Compare a base64-encoded image against the previous one for a given channel.
+
+        Args:
+            image_b64: Base64-encoded image (PNG or JPEG).
+            channel: Source channel ("desktop", "robot", etc.). Each channel
+                     maintains its own cached embeddings independently.
 
         Returns:
             {
@@ -257,6 +268,9 @@ class DinoService:
                 "threshold": float,        # The threshold used
             }
         """
+        if channel is None:
+            channel = self.DEFAULT_CHANNEL
+
         if not self._loaded:
             return {
                 "changed": True,
@@ -278,21 +292,24 @@ class DinoService:
                 )
                 curr_shape = (int(rows), int(cols), int(stride))
 
-                # Compare with previous frame
-                if self._prev_Xn is None or self._prev_shape != curr_shape:
-                    # First frame or shape changed
+                # Compare with previous frame for this channel
+                prev_Xn = self._prev_Xn.get(channel)
+                prev_shape = self._prev_shape.get(channel)
+
+                if prev_Xn is None or prev_shape != curr_shape:
+                    # First frame or shape changed for this channel
                     change = float("nan")
                     is_first = True
                 else:
                     change = _dino_col_change(
-                        self._prev_Xn, curr_Xn,
+                        prev_Xn, curr_Xn,
                         rows=rows, cols=cols, k_rows=SCROLL_K,
                     )
                     is_first = False
 
-                # Update state
-                self._prev_Xn = curr_Xn
-                self._prev_shape = curr_shape
+                # Update state for this channel
+                self._prev_Xn[channel] = curr_Xn
+                self._prev_shape[channel] = curr_shape
 
                 # Determine if changed
                 if is_first or not np.isfinite(change):
@@ -306,7 +323,7 @@ class DinoService:
                 changed = change > CHANGE_THRESHOLD
 
                 logger.debug(
-                    f"DINO similarity: {change:.4f} "
+                    f"DINO [{channel}] similarity: {change:.4f} "
                     f"(threshold={CHANGE_THRESHOLD}, changed={changed})"
                 )
 
@@ -318,7 +335,7 @@ class DinoService:
                 }
 
             except Exception as e:
-                logger.error(f"DINOv3 comparison error: {e}")
+                logger.error(f"DINOv3 [{channel}] comparison error: {e}")
                 # On error, assume changed (so LLM still gets called)
                 return {
                     "changed": True,
@@ -328,17 +345,28 @@ class DinoService:
                     "error": str(e),
                 }
 
-    def get_cached_focus(self) -> Optional[dict]:
-        """Get the last cached LLM focus state (for unchanged screens)."""
-        return self._cached_focus_state
+    def get_cached_focus(self, channel: str = None) -> Optional[dict]:
+        """Get the last cached LLM focus state for a channel."""
+        if channel is None:
+            channel = self.DEFAULT_CHANNEL
+        return self._cached_focus_state.get(channel)
 
-    def set_cached_focus(self, focus_state: dict) -> None:
-        """Cache the latest LLM focus state result."""
-        self._cached_focus_state = focus_state
+    def set_cached_focus(self, focus_state: dict, channel: str = None) -> None:
+        """Cache the latest LLM focus state result for a channel."""
+        if channel is None:
+            channel = self.DEFAULT_CHANNEL
+        self._cached_focus_state[channel] = focus_state
 
-    def reset(self) -> None:
-        """Reset state (e.g., on new session)."""
+    def reset(self, channel: str = None) -> None:
+        """Reset state for a specific channel, or all channels if None."""
         with self._lock:
-            self._prev_Xn = None
-            self._prev_shape = None
-            self._cached_focus_state = None
+            if channel is None:
+                # Reset all channels
+                self._prev_Xn.clear()
+                self._prev_shape.clear()
+                self._cached_focus_state.clear()
+            else:
+                # Reset only the specified channel
+                self._prev_Xn.pop(channel, None)
+                self._prev_shape.pop(channel, None)
+                self._cached_focus_state.pop(channel, None)
