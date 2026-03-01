@@ -46,7 +46,7 @@ ipcMain.handle('capture-screenshot', async () => {
     });
 
     if (sources.length === 0) {
-      return null;
+      return { error: 'Screen Recording permission denied', needsPermission: true };
     }
 
     const screenshot = sources[0].thumbnail;
@@ -58,8 +58,11 @@ ipcMain.handle('capture-screenshot', async () => {
       timestamp: new Date().toISOString(),
     };
   } catch (error) {
-    console.error('Screenshot capture failed:', error);
-    return null;
+    const errorMsg = String(error);
+    console.error('Screenshot capture failed:', errorMsg);
+    // "Failed to get sources" typically means permission denied on macOS
+    const needsPermission = errorMsg.toLowerCase().includes('failed to get sources');
+    return { error: errorMsg, needsPermission };
   }
 });
 

@@ -1,0 +1,21 @@
+torch
+torchvision
+matplotlib
+numpy>=1.26.4,<3
+ipykernel
+ipywidgets
+ipympl
+opencv-python
+scikit-learn
+
+# Gradio UI (`app.py`)
+gradio
+
+# For loading local `.env` (HF_TOKEN)
+python-dotenv
+
+# For screen capture (`screen_similarity.py`)
+mss
+
+# Install Transformers directly from GitHub source
+transformers @ git+https://github.com/huggingface/transformers.git
