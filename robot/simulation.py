@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 import numpy as np
 from typing import Optional, Tuple
@@ -136,57 +137,119 @@ class ReachyMotors:
         self._reachy = reachy
         from reachy_mini.utils import create_head_pose
         self._create_head_pose = create_head_pose
+        
+        # Enable motors so movements actually work on real hardware
+        try:
+            self._reachy.enable_motors()
+            logger.info("Motors enabled successfully")
+        except Exception as e:
+            logger.error(f"Failed to enable motors: {e}")
+        
+        # Wake up to known init pose
+        try:
+            self._reachy.wake_up()
+            logger.info("Robot woke up to init pose")
+        except Exception as e:
+            logger.warning(f"wake_up() failed (non-critical): {e}")
+        
         logger.info("ReachyMotors initialized")
     
     def goto_head(self, pitch: float = 0, roll: float = 0, yaw: float = 0, duration: float = 1.0):
-        """Move head using Reachy SDK"""
+        """Move head using Reachy SDK.
+        
+        Args:
+            pitch, roll, yaw: angles in degrees
+            duration: movement duration in seconds
+        
+        SDK signature: create_head_pose(x, y, z, roll, pitch, yaw, mm, degrees)
+        - x/y/z are POSITION offsets (meters), NOT rotation angles
+        - roll/pitch/yaw are rotation angles
+        """
         # Clamp to safety limits
         pitch = max(config.HEAD_PITCH_MIN, min(config.HEAD_PITCH_MAX, pitch))
         roll = max(config.HEAD_PITCH_MIN, min(config.HEAD_PITCH_MAX, roll))
         yaw = max(config.HEAD_YAW_MIN, min(config.HEAD_YAW_MAX, yaw))
         
         try:
+            head_pose = self._create_head_pose(
+                pitch=pitch, roll=roll, yaw=yaw, degrees=True
+            )
             self._reachy.goto_target(
-                head=self._create_head_pose(y=yaw, roll=roll, x=pitch, mm=False, degrees=True),
-                duration=duration
+                head=head_pose,
+                duration=duration,
+                body_yaw=None,  # Don't reset body position on head movements
             )
             logger.info(f"Head goto: pitch={pitch}, roll={roll}, yaw={yaw}")
         except Exception as e:
             logger.error(f"Head movement error: {e}")
     
     def goto_body(self, yaw: float = 0, duration: float = 1.0):
-        """Rotate body"""
+        """Rotate body.
+        
+        Args:
+            yaw: angle in degrees (clamped to safety limits)
+            duration: movement duration in seconds
+        
+        SDK expects body_yaw in RADIANS.
+        """
         yaw = max(config.BODY_YAW_MIN, min(config.BODY_YAW_MAX, yaw))
         try:
-            self._reachy.goto_target(body=yaw, duration=duration)
-            logger.info(f"Body goto: yaw={yaw}")
+            self._reachy.goto_target(
+                body_yaw=math.radians(yaw),
+                duration=duration,
+            )
+            logger.info(f"Body goto: yaw={yaw}° ({math.radians(yaw):.3f} rad)")
         except Exception as e:
             logger.error(f"Body movement error: {e}")
     
     def move_antenna(self, antenna: str, position: float, duration: float = 0.5):
-        """Move antenna (convert degrees to radians)"""
-        import math
-        radians = math.radians(position)
+        """Move a single antenna (convert degrees to radians).
+        
+        SDK requires antennas=[right_rad, left_rad] — ALWAYS 2 floats.
+        We read the current position of the other antenna to preserve it.
+        """
+        target_rad = math.radians(position)
         
         try:
+            # Read current antenna positions: [right_rad, left_rad]
+            current = self._reachy.get_present_antenna_joint_positions()
+            current_right = current[0] if current else 0.0
+            current_left = current[1] if current and len(current) > 1 else 0.0
+            
             if antenna == "left":
-                self._reachy.goto_target(antennas=[radians], duration=duration)
+                antennas = [current_right, target_rad]
             elif antenna == "right":
-                self._reachy.goto_target(antennas=[None, radians], duration=duration)
-            logger.info(f"{antenna} antenna goto: {position}°")
+                antennas = [target_rad, current_left]
+            else:
+                logger.warning(f"Unknown antenna: {antenna}")
+                return
+            
+            self._reachy.goto_target(
+                antennas=antennas,
+                duration=duration,
+                body_yaw=None,  # Don't reset body position
+            )
+            logger.info(f"{antenna} antenna goto: {position}° ({target_rad:.3f} rad)")
         except Exception as e:
             logger.error(f"Antenna movement error: {e}")
     
     def get_position(self) -> dict:
-        """Get current motor positions"""
+        """Get current motor positions from real hardware."""
         try:
+            # get_current_joint_positions() returns (head[7], antennas[2]) in radians
+            head_joints, antenna_joints = self._reachy.get_current_joint_positions()
+            # antenna order: [right_rad, left_rad]
+            antennas = self._reachy.get_present_antenna_joint_positions()
+            right_rad = antennas[0] if antennas else 0.0
+            left_rad = antennas[1] if antennas and len(antennas) > 1 else 0.0
             return {
-                "head": {"pitch": 0, "roll": 0, "yaw": 0},  # Would need to read actual positions
-                "body": {"yaw": 0},
-                "antenna_left": 0,
-                "antenna_right": 0
+                "head": {"pitch": 0, "roll": 0, "yaw": 0},  # TODO: extract from head_joints 4x4 matrix
+                "body": {"yaw": 0},  # TODO: extract from head_joints
+                "antenna_left": math.degrees(left_rad),
+                "antenna_right": math.degrees(right_rad),
             }
-        except:
+        except Exception as e:
+            logger.debug(f"Could not read positions: {e}")
             return {"head": {}, "body": {}, "antenna_left": 0, "antenna_right": 0}
 
 
@@ -259,6 +322,11 @@ class ReachySimulation:
     
     def cleanup(self):
         self.camera.release()
+        try:
+            self._reachy.disable_motors()
+            logger.info("Motors disabled")
+        except Exception as e:
+            logger.warning(f"Failed to disable motors on cleanup: {e}")
         logger.info("Reachy cleanup complete")
 
 
