@@ -81,6 +81,7 @@ app.on('ready', () => {
   createWindow();
 });
 
+// IPC handler for native macOS notifications
 ipcMain.handle('send-notification', async (_event, title: string, body: string) => {
   if (Notification.isSupported()) {
     const notification = new Notification({
