@@ -371,6 +371,42 @@ class ReachySimulation:
         logger.info("Reachy cleanup complete")
 
 
+def _ensure_system_gi():
+    """Make the 'gi' module importable even inside a venv.
+    
+    gi (GObject Introspection) is a system package installed via apt
+    (python3-gi). It cannot be pip-installed. If the venv doesn't have
+    system site-packages enabled, we add the system path manually.
+    """
+    try:
+        import gi  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    
+    import sys
+    import glob
+    # Common paths for system python packages on Debian/Ubuntu (Reachy OS)
+    candidates = sorted(glob.glob("/usr/lib/python3*/dist-packages"), reverse=True)
+    candidates.append("/usr/lib/python3/dist-packages")
+    
+    for path in candidates:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+            logger.debug(f"Added {path} to sys.path")
+    
+    try:
+        import gi  # noqa: F401
+        logger.info(f"Found system gi module via added path ({gi.__file__})")
+        return True
+    except ImportError:
+        logger.warning(
+            "gi module not found. GStreamer camera will not work. "
+            "Fix: edit venv/pyvenv.cfg → include-system-site-packages = true"
+        )
+        return False
+
+
 def create_robot_interfaces(simulation: bool = None):
     """Factory function to create robot interfaces
     
@@ -394,7 +430,10 @@ def create_robot_interfaces(simulation: bool = None):
             sim = Simulation()
             return sim.camera, sim.motors, sim.speaker, sim
         
-        # Step 2: connect and build interfaces (any error here is NOT a missing SDK)
+        # Step 2: ensure gi (GObject) is importable — needed for GStreamer camera
+        _ensure_system_gi()
+        
+        # Step 3: connect and build interfaces
         try:
             reachy = ReachyMini()
             logger.info("Connected to Reachy!")
