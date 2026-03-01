@@ -33,7 +33,7 @@ export interface WebSocketMessage {
 
 const WS_URL = 'ws://127.0.0.1:9800/ws/desktop';
 const API_BASE = 'http://127.0.0.1:9800';
-const SCREENSHOT_INTERVAL = 1000; // 1 second
+const SCREENSHOT_INTERVAL = 5000; // 5 seconds
 
 export function useFocusDetection() {
   const [isConnected, setIsConnected] = useState(false);
@@ -61,6 +61,8 @@ export function useFocusDetection() {
   const [autoDetect, setAutoDetect] = useState(true);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [showDistraction, setShowDistraction] = useState(false);
+  const [distractionResources, setDistractionResources] = useState<Array<{ title: string; action: string }>>([]);
+  const [isLoadingResources, setIsLoadingResources] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const sessionStartRef = useRef<number | null>(null);
@@ -199,6 +201,57 @@ export function useFocusDetection() {
       payload: { event, text },
     });
   }, [sendMessage]);
+const setTaskContext = useCallback((
+    task: { name: string; description: string; todos: Array<{ title: string; status: string }> } | null,
+    currentTodo?: string | null,
+  ) => {
+    if (task) {
+      const completed = task.todos.filter(t => t.status === 'completed').length;
+      taskContextRef.current = {
+        task_name: task.name,
+        task_description: task.description,
+        current_todo: currentTodo || task.todos.find(t => t.status !== 'completed')?.title || '',
+        todos: task.todos.map(t => ({ title: t.title, status: t.status })),
+        completed_count: completed,
+        total_count: task.todos.length,
+      };
+    } else {
+      taskContextRef.current = null;
+    }
+  }, []);
+
+  const fetchResources = useCallback(async () => {
+    if (!taskContextRef.current) return;
+    setIsLoadingResources(true);
+    try {
+      const ctx = taskContextRef.current;
+      const response = await fetch(`${API_BASE}/api/suggest-resources`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_name: ctx.task_name,
+          task_description: ctx.task_description,
+          current_todo: ctx.current_todo,
+          todos: ctx.todos,
+          // elapsed_seconds and estimated_minutes will be filled by the caller if available
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setDistractionResources(data.resources || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch resources:', err);
+    } finally {
+      setIsLoadingResources(false);
+    }
+  }, []);
+
+  const dismissDistraction = useCallback(() => {
+    setShowDistraction(false);
+    setDistractionResources([]);
+    setIsLoadingResources(false);
+  }, []);
 
   const analyzeScreenshot = useCallback(async () => {
     if (isAnalyzing) return;
@@ -262,15 +315,26 @@ export function useFocusDetection() {
       setDesktopFocus(focusState);
       addFocusDataPoint(focusState);
       
-      // Detect focus→distracted transition for toast notification
+      // Detect focus→distracted transition for overlay notification
       const prevState = prevFocusStateRef.current;
       if (
         focusState.focus_state === 'distracted' &&
         prevState !== 'distracted'
       ) {
         setShowDistraction(true);
-        // Auto-dismiss after 10 seconds
-        setTimeout(() => setShowDistraction(false), 10000);
+        setDistractionResources([]);
+        fetchResources();
+        // Send native macOS notification
+        const api = (window as any).electronAPI;
+        if (api?.sendNotification) {
+          const taskName = taskContextRef.current?.task_name || 'your task';
+          api.sendNotification(
+            'You seem distracted',
+            `Get back to ${taskName}`,
+          );
+        }
+        // Auto-dismiss after 30 seconds
+        setTimeout(() => setShowDistraction(false), 30000);
       }
       prevFocusStateRef.current = focusState.focus_state;
 
@@ -296,7 +360,7 @@ export function useFocusDetection() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [isAnalyzing, sendFocusUpdate, sendReaction, sendMessage, addFocusDataPoint]);
+  }, [isAnalyzing, sendFocusUpdate, sendReaction, sendMessage, addFocusDataPoint, fetchResources]);
 
   const startAutoDetection = useCallback(() => {
     if (screenshotInterval) return;
@@ -343,6 +407,8 @@ export function useFocusDetection() {
     focusHistory,
     contentChangeInfo,
     showDistraction,
+    distractionResources,
+    isLoadingResources,
     isAnalyzing,
     autoDetect,
     permissionError,

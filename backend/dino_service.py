@@ -32,7 +32,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.5"))
 TOKEN_STRIDE_PREFER = int(os.environ.get("DINO_TOKEN_STRIDE_PREFER", "16"))
 SCROLL_K = int(os.environ.get("DINO_SCROLL_K", "16"))
-CHANGE_THRESHOLD = float(os.environ.get("DINO_TRIGGER_THRESH", "0.10"))
+CHANGE_THRESHOLD = float(os.environ.get("DINO_TRIGGER_THRESH", "0.80"))
 
 
 # ── Core Functions (from screen_change_trigger.py) ────────────────────────────

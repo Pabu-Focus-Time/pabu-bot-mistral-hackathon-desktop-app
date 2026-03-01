@@ -170,7 +170,7 @@ async def analyze_image(image_data: dict):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "pixtral-large-latest",
+                    "model": "pixtral-12b-2409",
                     "messages": [
                         {
                             "role": "user",
@@ -423,7 +423,7 @@ async def broadcast_message(message: dict):
 
 # --- Todo Generation Agent (AWS Bedrock + Mistral Large) ---
 
-TODO_SYSTEM_PROMPT = """You are an expert productivity and task-planning AI agent. Your job is to take a task name and optional description, then generate an optimal, actionable todo list to complete that task.
+TODO_SYSTEM_PROMPT = """You are an expert productivity and task-planning AI agent. Your job is to take a task name and optional description, then generate an optimal, actionable todo list with realistic time estimates.
 
 Rules:
 1. Break the task into 3-8 concrete, actionable steps.
@@ -431,14 +431,15 @@ Rules:
 3. Each step should be small enough to complete in one focused session (15-60 min).
 4. Use clear, imperative language (e.g., "Set up project repository", not "Setting up").
 5. Include a brief description for each step explaining what specifically to do.
-6. Consider: research/planning steps first, then implementation, then testing/review.
-7. Be specific to the task — don't give generic advice.
+6. Estimate realistic time in minutes for each step. Consider: research/reading = longer, simple edits/config = shorter, implementation = varies by complexity. Be honest — don't underestimate.
+7. Consider: research/planning steps first, then implementation, then testing/review.
+8. Be specific to the task — don't give generic advice.
 
 Respond with ONLY a valid JSON object in this exact format:
 {
   "todos": [
-    {"title": "Step title", "description": "Brief description of what to do"},
-    {"title": "Step title", "description": "Brief description of what to do"}
+    {"title": "Step title", "description": "Brief description of what to do", "estimated_minutes": 30},
+    {"title": "Step title", "description": "Brief description of what to do", "estimated_minutes": 20}
   ]
 }"""
 
@@ -593,11 +594,11 @@ async def generate_todos(request: GenerateTodosRequest):
         logger.info("All AI services unavailable, using local fallback")
         result = {
             "todos": [
-                {"title": "Research", "description": f"Research requirements and resources for: {task_name}"},
-                {"title": "Plan", "description": "Create a detailed plan and outline"},
-                {"title": "Implement", "description": "Implement the core functionality"},
-                {"title": "Test", "description": "Test and verify the implementation"},
-                {"title": "Refine", "description": "Refine, polish, and document the result"},
+                {"title": "Research", "description": f"Research requirements and resources for: {task_name}", "estimated_minutes": 20},
+                {"title": "Plan", "description": "Create a detailed plan and outline", "estimated_minutes": 15},
+                {"title": "Implement", "description": "Implement the core functionality", "estimated_minutes": 45},
+                {"title": "Test", "description": "Test and verify the implementation", "estimated_minutes": 20},
+                {"title": "Refine", "description": "Refine, polish, and document the result", "estimated_minutes": 15},
             ]
         }
 
@@ -605,24 +606,131 @@ async def generate_todos(request: GenerateTodosRequest):
     todos = result.get("todos", [])
     if not isinstance(todos, list) or len(todos) == 0:
         todos = [
-            {"title": "Research", "description": f"Research: {task_name}"},
-            {"title": "Plan", "description": "Create a plan"},
-            {"title": "Implement", "description": "Build the core work"},
-            {"title": "Review", "description": "Review and finalize"},
+            {"title": "Research", "description": f"Research: {task_name}", "estimated_minutes": 20},
+            {"title": "Plan", "description": "Create a plan", "estimated_minutes": 15},
+            {"title": "Implement", "description": "Build the core work", "estimated_minutes": 45},
+            {"title": "Review", "description": "Review and finalize", "estimated_minutes": 15},
         ]
 
     # Ensure each todo has required fields
     validated_todos = []
     for todo in todos:
         if isinstance(todo, dict) and "title" in todo:
+            # Parse estimated_minutes, default to 30 if missing or invalid
+            est = todo.get("estimated_minutes", 30)
+            try:
+                est = int(est)
+                if est <= 0 or est > 480:
+                    est = 30
+            except (ValueError, TypeError):
+                est = 30
+
             validated_todos.append(
                 {
                     "title": todo.get("title", "Untitled"),
                     "description": todo.get("description", ""),
+                    "estimated_minutes": est,
                 }
             )
 
     return {"todos": validated_todos}
+
+
+# --- Resource Suggestion Agent ---
+
+RESOURCE_SYSTEM_PROMPT = """You are a focus coach AI. The user is working on a specific task but has been detected as distracted. Your job is to give them 2-3 specific, actionable suggestions to help them refocus on their task.
+
+Rules:
+1. Be specific to their actual task and current todo item — not generic advice.
+2. Each suggestion should be something they can do RIGHT NOW (not "plan for later").
+3. Include concrete actions: what app to open, what to search for, what to read/write.
+4. Keep suggestions brief and encouraging — not preachy.
+5. If they are behind schedule on a todo, acknowledge it constructively.
+
+Respond with ONLY a valid JSON object:
+{
+  "resources": [
+    {"title": "Brief action title", "action": "Specific thing to do right now"},
+    {"title": "Brief action title", "action": "Specific thing to do right now"}
+  ]
+}"""
+
+
+@app.post("/api/suggest-resources")
+async def suggest_resources(data: dict):
+    """
+    AI agent that suggests specific resources/actions to help a distracted user refocus.
+    Uses Bedrock -> Mistral API fallback, with hardcoded fallback if both fail.
+    """
+    task_name = data.get("task_name", "").strip()
+    task_description = data.get("task_description", "").strip()
+    current_todo = data.get("current_todo", "").strip()
+    todos = data.get("todos", [])
+    elapsed_seconds = data.get("elapsed_seconds", 0)
+    estimated_minutes = data.get("estimated_minutes", 0)
+
+    # Build context prompt
+    parts = []
+    if task_name:
+        parts.append(f'Task: "{task_name}"')
+    if task_description:
+        parts.append(f"Description: {task_description}")
+    if current_todo:
+        parts.append(f'Currently working on: "{current_todo}"')
+    if estimated_minutes > 0:
+        elapsed_min = round(elapsed_seconds / 60, 1)
+        parts.append(f"Time spent on current todo: {elapsed_min} min (estimated: {estimated_minutes} min)")
+        if elapsed_seconds > estimated_minutes * 60:
+            parts.append("NOTE: The user is BEHIND SCHEDULE on this todo.")
+    if todos:
+        completed = sum(1 for t in todos if t.get("status") == "completed")
+        total = len(todos)
+        parts.append(f"Progress: {completed}/{total} todos completed")
+
+    prompt = "\n".join(parts) if parts else "The user is working but got distracted. Suggest ways to refocus."
+    prompt += "\n\nSuggest 2-3 specific actions to help them refocus right now."
+
+    # Try Bedrock first
+    result = await call_bedrock_mistral(prompt, RESOURCE_SYSTEM_PROMPT)
+
+    if result is None:
+        result = await call_mistral_api(prompt, RESOURCE_SYSTEM_PROMPT)
+
+    if result is None:
+        # Hardcoded fallback
+        resources = []
+        if current_todo:
+            resources.append({
+                "title": f"Continue: {current_todo[:40]}",
+                "action": f"Open the relevant app and pick up where you left off on this step."
+            })
+        resources.append({
+            "title": "Close distracting tabs",
+            "action": "Close social media, news, and other non-work tabs. Keep only task-relevant ones."
+        })
+        resources.append({
+            "title": "Quick re-read your plan",
+            "action": f"Review your task description and todo list to rebuild context on '{task_name or 'your task'}'."
+        })
+        return {"resources": resources}
+
+    # Validate
+    resources = result.get("resources", [])
+    if not isinstance(resources, list) or len(resources) == 0:
+        return {"resources": [
+            {"title": "Refocus", "action": "Take a deep breath and return to your current todo."},
+            {"title": "Close distractions", "action": "Close non-work tabs and apps."},
+        ]}
+
+    validated = []
+    for r in resources[:3]:
+        if isinstance(r, dict) and "title" in r:
+            validated.append({
+                "title": r.get("title", ""),
+                "action": r.get("action", ""),
+            })
+
+    return {"resources": validated}
 
 
 # --- Smart Analysis Endpoint (DINOv3 pre-filter + LangChain synthesis) ---
@@ -786,7 +894,7 @@ async def analyze_smart(data: dict):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "pixtral-large-latest",
+                            "model": "pixtral-12b-2409",
                             "messages": [{
                                 "role": "user",
                                 "content": [
@@ -1038,7 +1146,7 @@ async def analyze_robot(data: dict):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "pixtral-large-latest",
+                            "model": "pixtral-12b-2409",
                             "messages": [
                                 {
                                     "role": "user",

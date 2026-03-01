@@ -4,6 +4,9 @@ export interface TodoNode {
   description: string;
   status: 'pending' | 'in_progress' | 'completed';
   children: TodoNode[];
+  estimatedMinutes?: number;   // AI-estimated time for this todo
+  startedAt?: number;          // Timestamp (ms) when this todo became current
+  elapsedSeconds?: number;     // Accumulated seconds spent on this todo
 }
 
 export interface Task {
@@ -32,12 +35,14 @@ export const createTask = (name: string, description: string): Task => ({
   todos: [],
 });
 
-export const createTodoNode = (title: string, description = ''): TodoNode => ({
+export const createTodoNode = (title: string, description = '', estimatedMinutes?: number): TodoNode => ({
   id: `todo-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
   title,
   description,
   status: 'pending',
   children: [],
+  estimatedMinutes,
+  elapsedSeconds: 0,
 });
 
 export const flattenTodos = (todos: TodoNode[]): TodoNode[] => {
@@ -60,4 +65,14 @@ export const getCompletedCount = (todos: TodoNode[]): number => {
 
 export const getTotalCount = (todos: TodoNode[]): number => {
   return flattenTodos(todos).length;
+};
+
+export const getTotalEstimatedMinutes = (todos: TodoNode[]): number => {
+  return flattenTodos(todos).reduce((sum, t) => sum + (t.estimatedMinutes || 0), 0);
+};
+
+export const getRemainingEstimatedMinutes = (todos: TodoNode[]): number => {
+  return flattenTodos(todos)
+    .filter(t => t.status !== 'completed')
+    .reduce((sum, t) => sum + (t.estimatedMinutes || 0), 0);
 };

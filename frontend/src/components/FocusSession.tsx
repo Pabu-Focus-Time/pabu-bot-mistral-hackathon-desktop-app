@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Square, Clock, Target, Activity, RefreshCw, Minus } from 'lucide-react';
+import { Play, Square, Clock, Target, Activity, RefreshCw, Minus, AlertCircle } from 'lucide-react';
 import { tokens, getFocusColor, getFocusBg } from '../styles/tokens';
 import { FocusState, FocusDataPoint, ContentChangeInfo } from '../websocket';
 import FocusGraph from './FocusGraph';
@@ -13,6 +13,9 @@ interface FocusSessionProps {
   contentChangeInfo: ContentChangeInfo;
   currentTaskName: string | null;
   currentTodoName: string | null;
+  currentTodoElapsed?: number;    // seconds spent on current todo
+  currentTodoEstimate?: number;   // estimated minutes for current todo
+  isBehindSchedule?: boolean;     // whether user exceeded the estimate
   sessionDuration: number;
   windowData: {
     appName: string;
@@ -34,6 +37,9 @@ const FocusSession: React.FC<FocusSessionProps> = ({
   contentChangeInfo,
   currentTaskName,
   currentTodoName,
+  currentTodoElapsed = 0,
+  currentTodoEstimate = 0,
+  isBehindSchedule = false,
   sessionDuration,
   windowData,
   activityData,
@@ -234,13 +240,57 @@ const FocusSession: React.FC<FocusSessionProps> = ({
                   fontSize: tokens.typography.fontSize.xs,
                   color: tokens.colors.textTertiary,
                   marginTop: '4px',
-                  maxWidth: '160px',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
+                  maxWidth: '200px',
                   textAlign: 'right',
                 }}>
-                  {currentTaskName}
+                  <div style={{
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}>
+                    {currentTaskName}
+                  </div>
+                  {/* Current todo timer */}
+                  {currentTodoName && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      gap: '4px',
+                      marginTop: '2px',
+                      fontSize: tokens.typography.fontSize.xs,
+                      fontFamily: tokens.typography.fontMono,
+                      color: isBehindSchedule ? tokens.colors.danger : tokens.colors.textSecondary,
+                    }}>
+                      {isBehindSchedule && <AlertCircle size={10} />}
+                      <span style={{
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        maxWidth: '100px',
+                        fontFamily: tokens.typography.fontFamily,
+                      }}>
+                        {currentTodoName}
+                      </span>
+                      {currentTodoEstimate > 0 && (
+                        <span>
+                          {formatDuration(currentTodoElapsed)}/{currentTodoEstimate}m
+                        </span>
+                      )}
+                      {isBehindSchedule && (
+                        <span style={{
+                          padding: '0px 4px',
+                          background: tokens.colors.dangerMuted,
+                          borderRadius: tokens.radius.xs,
+                          fontSize: '9px',
+                          fontFamily: tokens.typography.fontFamily,
+                          fontWeight: tokens.typography.fontWeight.medium,
+                        }}>
+                          BEHIND
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
