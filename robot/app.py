@@ -32,6 +32,8 @@ class FocusTimeRobot:
         
         self._running = False
         self._loop = None
+        self._session_active = False
+        self._task_context: dict | None = None
     
     async def setup(self):
         """Initialize all components"""
@@ -116,13 +118,21 @@ class FocusTimeRobot:
             reaction="none"
         )
         
-        # Send focus context to voice agent
+        # Send focus context to voice agent (enriched with task info)
         if self.voice and self.voice.is_running:
             confidence = result.get("confidence", 0.0)
             reason = result.get("reason", "")
-            self.voice.send_context(
-                f'User is "{focus_state}" (confidence: {confidence:.0%}). Reason: {reason}'
-            )
+            parts = [f'User is "{focus_state}" (confidence: {confidence:.0%}). Reason: {reason}']
+            if self._task_context:
+                task_name = self._task_context.get("task_name")
+                current_todo = self._task_context.get("current_todo")
+                if task_name:
+                    parts.append(f"Their task is: {task_name}")
+                if current_todo:
+                    parts.append(f"Working on: {current_todo}")
+                if focus_state == "distracted":
+                    parts.append("Gently remind them to refocus.")
+            self.voice.send_context(" ".join(parts))
         
         # React based on focus state
         if focus_state == "distracted":
@@ -158,6 +168,28 @@ class FocusTimeRobot:
             if text:
                 await self.audio.speak_blocking(text)
         
+        elif msg_type == "session_start":
+            self._session_active = True
+            self._task_context = payload
+            logger.info(f"Session started: {payload.get('task_name', '?')}")
+            await self.focus_det.start()
+            if self.voice and not self.voice.is_running:
+                self.voice.start()
+        
+        elif msg_type == "session_stop":
+            self._session_active = False
+            self._task_context = None
+            logger.info("Session stopped")
+            await self.focus_det.stop()
+            if self.voice and self.voice.is_running:
+                self.voice.stop()
+        
+        elif msg_type == "task_context":
+            self._task_context = payload
+            task_name = payload.get("task_name", "?")
+            current_todo = payload.get("current_todo", "")
+            logger.info(f"Task context updated: {task_name} / {current_todo}")
+        
         elif msg_type == "ping":
             await self.ws_client.send({"type": "pong", "source": "robot"})
     
@@ -190,10 +222,7 @@ class FocusTimeRobot:
         # Start WebSocket client
         await self.ws_client.run_background()
         
-        # Start focus detector
-        await self.focus_det.start()
-        
-        logger.info("Focus Time Robot running...")
+        logger.info("Focus Time Robot running (waiting for session_start)...")
         
         # Keep running
         while self._running:

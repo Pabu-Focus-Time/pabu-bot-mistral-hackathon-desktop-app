@@ -12,6 +12,7 @@ const App: React.FC = () => {
     isConnected,
     desktopFocus,
     robotFocus,
+    robotConnected,
     isAnalyzing,
     autoDetect,
     focusHistory,
@@ -416,6 +417,27 @@ const App: React.FC = () => {
               color: tokens.colors.textSecondary,
             }}>
               {isConnected ? 'Server connected' : 'Disconnected'}
+            </span>
+          </div>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px',
+            borderRadius: tokens.radius.sm,
+          }}>
+            <div style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              background: robotConnected ? tokens.colors.success : tokens.colors.textTertiary,
+              flexShrink: 0,
+            }} />
+            <span style={{
+              fontSize: tokens.typography.fontSize.xs,
+              color: tokens.colors.textSecondary,
+            }}>
+              {robotConnected ? 'Robot online' : 'Robot offline'}
             </span>
           </div>
         </div>

@@ -138,7 +138,9 @@ class FocusDetector:
             await asyncio.sleep(self.frame_interval)
     
     async def start(self):
-        """Start the focus detector"""
+        """Start the focus detector (safe to call multiple times)"""
+        if self._running:
+            return
         self._running = True
         asyncio.create_task(self.analysis_loop())
     
@@ -204,7 +206,9 @@ class MockFocusDetector:
             await asyncio.sleep(self.frame_interval)
     
     async def start(self):
-        """Start mock detector"""
+        """Start mock detector (safe to call multiple times)"""
+        if self._running:
+            return
         self._running = True
         asyncio.create_task(self.analysis_loop())
     

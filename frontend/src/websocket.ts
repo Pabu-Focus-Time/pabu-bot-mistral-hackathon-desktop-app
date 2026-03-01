@@ -25,7 +25,7 @@ export interface FocusDataPoint {
 }
 
 export interface WebSocketMessage {
-  type: 'focus_update' | 'notification' | 'reaction' | 'ping' | 'pong';
+  type: 'focus_update' | 'robot_focus_update' | 'robot_status' | 'notification' | 'reaction' | 'session_start' | 'session_stop' | 'task_context' | 'ping' | 'pong';
   source: 'desktop' | 'robot' | 'server';
   timestamp: string;
   payload: Record<string, unknown>;
@@ -49,6 +49,7 @@ export function useFocusDetection() {
     reason: '',
     source: 'robot',
   });
+  const [robotConnected, setRobotConnected] = useState(false);
   const [focusHistory, setFocusHistory] = useState<FocusDataPoint[]>([]);
   const [contentChangeInfo, setContentChangeInfo] = useState<ContentChangeInfo>({
     contentChanged: true,
@@ -127,6 +128,7 @@ export function useFocusDetection() {
 
         if (message.type === 'focus_update' && message.source === 'robot') {
           const payload = message.payload as unknown as FocusState;
+          console.log(`[Robot] Focus update: ${payload.focus_state} (${Math.round((payload.confidence || 0) * 100)}%) — ${payload.reason}`);
           setRobotFocus({
             focus_state: payload.focus_state,
             confidence: payload.confidence,
@@ -134,6 +136,21 @@ export function useFocusDetection() {
             timestamp: message.timestamp,
             source: 'robot',
           });
+        } else if (message.type === 'robot_focus_update') {
+          const payload = message.payload as unknown as FocusState;
+          console.log(`[Robot Camera] Focus update: ${payload.focus_state} (${Math.round((payload.confidence || 0) * 100)}%) — ${payload.reason}`);
+          setRobotFocus({
+            focus_state: payload.focus_state,
+            confidence: payload.confidence,
+            reason: payload.reason,
+            timestamp: message.timestamp,
+            source: 'robot',
+          });
+        } else if (message.type === 'robot_status') {
+          const connected = !!(message.payload as Record<string, unknown>).connected;
+          const count = (message.payload as Record<string, unknown>).robot_count as number;
+          console.log(`[Robot] ${connected ? 'Connected' : 'Disconnected'} (${count} robot(s) online)`);
+          setRobotConnected(connected);
         }
       } catch (err) {
         console.error('Failed to parse message:', err);
@@ -208,10 +225,16 @@ const setTaskContext = useCallback((
         completed_count: completed,
         total_count: task.todos.length,
       };
+      sendMessage({
+        type: 'task_context',
+        source: 'desktop',
+        timestamp: new Date().toISOString(),
+        payload: taskContextRef.current,
+      });
     } else {
       taskContextRef.current = null;
     }
-  }, []);
+  }, [sendMessage]);
 
   const fetchResources = useCallback(async () => {
     if (!taskContextRef.current) return;
@@ -364,11 +387,17 @@ const setTaskContext = useCallback((
     startSession();
     // Reset DINOv3 state for fresh session
     fetch(`${API_BASE}/api/analyze-smart/reset`, { method: 'POST' }).catch(() => {});
+    sendMessage({
+      type: 'session_start',
+      source: 'desktop',
+      timestamp: new Date().toISOString(),
+      payload: taskContextRef.current || {},
+    });
     const interval = window.setInterval(analyzeScreenshot, SCREENSHOT_INTERVAL);
     setScreenshotInterval(interval);
     setAutoDetect(true);
     analyzeScreenshot();
-  }, [screenshotInterval, analyzeScreenshot, startSession]);
+  }, [screenshotInterval, analyzeScreenshot, startSession, sendMessage]);
 
   const stopAutoDetection = useCallback(() => {
     if (screenshotInterval) {
@@ -376,7 +405,13 @@ const setTaskContext = useCallback((
       setScreenshotInterval(null);
     }
     setAutoDetect(false);
-  }, [screenshotInterval]);
+    sendMessage({
+      type: 'session_stop',
+      source: 'desktop',
+      timestamp: new Date().toISOString(),
+      payload: {},
+    });
+  }, [screenshotInterval, sendMessage]);
 
   useEffect(() => {
     startDataCollection();
@@ -401,6 +436,7 @@ const setTaskContext = useCallback((
     isConnected,
     desktopFocus,
     robotFocus,
+    robotConnected,
     focusHistory,
     contentChangeInfo,
     showDistraction,

@@ -106,6 +106,19 @@ async def websocket_robot(websocket: WebSocket):
     await websocket.accept()
     robot_connections.append(websocket)
     print(f"Robot connected. Total connections: {len(robot_connections)}")
+
+    status_msg = {
+        "type": "robot_status",
+        "source": "server",
+        "timestamp": datetime.utcnow().isoformat(),
+        "payload": {"connected": True, "robot_count": len(robot_connections)},
+    }
+    for desktop_ws in desktop_connections:
+        try:
+            await desktop_ws.send_json(status_msg)
+        except Exception:
+            pass
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -119,6 +132,18 @@ async def websocket_robot(websocket: WebSocket):
     except WebSocketDisconnect:
         robot_connections.remove(websocket)
         print(f"Robot disconnected. Remaining: {len(robot_connections)}")
+
+        status_msg = {
+            "type": "robot_status",
+            "source": "server",
+            "timestamp": datetime.utcnow().isoformat(),
+            "payload": {"connected": len(robot_connections) > 0, "robot_count": len(robot_connections)},
+        }
+        for desktop_ws in desktop_connections:
+            try:
+                await desktop_ws.send_json(status_msg)
+            except Exception:
+                pass
 
 
 # REST Endpoints
