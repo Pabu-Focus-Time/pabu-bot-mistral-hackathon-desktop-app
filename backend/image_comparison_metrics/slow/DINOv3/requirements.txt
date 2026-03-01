@@ -14,5 +14,8 @@ gradio
 # For loading local `.env` (HF_TOKEN)
 python-dotenv
 
+# For screen capture (`screen_similarity.py`)
+mss
+
 # Install Transformers directly from GitHub source
 transformers @ git+https://github.com/huggingface/transformers.git
