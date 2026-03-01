@@ -32,7 +32,8 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.5"))
 TOKEN_STRIDE_PREFER = int(os.environ.get("DINO_TOKEN_STRIDE_PREFER", "16"))
 SCROLL_K = int(os.environ.get("DINO_SCROLL_K", "16"))
-CHANGE_THRESHOLD = float(os.environ.get("DINO_TRIGGER_THRESH", "0.80"))
+CHANGE_THRESHOLD = float(os.environ.get("DINO_TRIGGER_THRESH", "0.005"))
+CACHE_TTL_SECONDS = float(os.environ.get("DINO_CACHE_TTL", "30"))
 
 
 # ── Core Functions (from screen_change_trigger.py) ────────────────────────────
@@ -346,16 +347,28 @@ class DinoService:
                 }
 
     def get_cached_focus(self, channel: str = None) -> Optional[dict]:
-        """Get the last cached LLM focus state for a channel."""
+        """Get the last cached LLM focus state for a channel.
+        Returns None if the cache has expired (older than CACHE_TTL_SECONDS)."""
+        import time
         if channel is None:
             channel = self.DEFAULT_CHANNEL
-        return self._cached_focus_state.get(channel)
+        entry = self._cached_focus_state.get(channel)
+        if entry is None:
+            return None
+        cached_at = entry.get("_cached_at", 0)
+        if time.time() - cached_at > CACHE_TTL_SECONDS:
+            logger.debug(f"Cache expired for channel '{channel}' (TTL={CACHE_TTL_SECONDS}s)")
+            return None
+        # Return without the internal timestamp field
+        result = {k: v for k, v in entry.items() if k != "_cached_at"}
+        return result
 
     def set_cached_focus(self, focus_state: dict, channel: str = None) -> None:
-        """Cache the latest LLM focus state result for a channel."""
+        """Cache the latest LLM focus state result for a channel with a timestamp."""
+        import time
         if channel is None:
             channel = self.DEFAULT_CHANNEL
-        self._cached_focus_state[channel] = focus_state
+        self._cached_focus_state[channel] = {**focus_state, "_cached_at": time.time()}
 
     def reset(self, channel: str = None) -> None:
         """Reset state for a specific channel, or all channels if None."""

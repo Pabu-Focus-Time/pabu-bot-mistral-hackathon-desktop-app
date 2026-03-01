@@ -3,7 +3,7 @@ import { captureAndAnalyzeSmart, SmartAnalysisResult } from './screenshot';
 import { startDataCollection, stopDataCollection, collectFocusData, WindowData, ActivityData } from './dataCollector';
 
 export interface FocusState {
-  focus_state: 'focused' | 'distracted' | 'unknown';
+  focus_state: 'focused' | 'distracted' | 'unknown' | 'paused';
   confidence: number;
   reason: unknown;
   timestamp?: string;
@@ -20,7 +20,7 @@ export interface ContentChangeInfo {
 export interface FocusDataPoint {
   time: number; // seconds since session start
   score: number; // 0-100
-  state: 'focused' | 'distracted' | 'unknown';
+  state: 'focused' | 'distracted' | 'unknown' | 'paused';
   timestamp: string;
 }
 
@@ -33,7 +33,7 @@ export interface WebSocketMessage {
 
 const WS_URL = 'ws://127.0.0.1:9800/ws/desktop';
 const API_BASE = 'http://127.0.0.1:9800';
-const SCREENSHOT_INTERVAL = 5000; // 5 seconds
+const SCREENSHOT_INTERVAL = 1000; // 1 second
 
 export function useFocusDetection() {
   const [isConnected, setIsConnected] = useState(false);
@@ -193,14 +193,7 @@ export function useFocusDetection() {
     });
   }, [sendMessage]);
 
-  const sendVoiceEvent = useCallback((event: string, text: string) => {
-    sendMessage({
-      type: 'voice_event',
-      source: 'desktop',
-      timestamp: new Date().toISOString(),
-      payload: { event, text },
-    });
-  }, [sendMessage]);
+
 const setTaskContext = useCallback((
     task: { name: string; description: string; todos: Array<{ title: string; status: string }> } | null,
     currentTodo?: string | null,
@@ -305,7 +298,7 @@ const setTaskContext = useCallback((
       });
 
       const focusState: FocusState = {
-        focus_state: result.focus_state as 'focused' | 'distracted' | 'unknown',
+        focus_state: result.focus_state as 'focused' | 'distracted' | 'unknown' | 'paused',
         confidence: result.confidence,
         reason: result.reason,
         timestamp: new Date().toISOString(),
@@ -313,47 +306,51 @@ const setTaskContext = useCallback((
       };
       
       setDesktopFocus(focusState);
-      addFocusDataPoint(focusState);
-      
-      // Detect focus→distracted transition for overlay notification
-      const prevState = prevFocusStateRef.current;
-      if (
-        focusState.focus_state === 'distracted' &&
-        prevState !== 'distracted'
-      ) {
-        setShowDistraction(true);
-        setDistractionResources([]);
-        fetchResources();
-        // Send native macOS notification
-        const api = (window as any).electronAPI;
-        if (api?.sendNotification) {
-          const taskName = taskContextRef.current?.task_name || 'your task';
-          api.sendNotification(
-            'You seem distracted',
-            `Get back to ${taskName}`,
-          );
-        }
-        // Auto-dismiss after 30 seconds
-        setTimeout(() => setShowDistraction(false), 30000);
-      }
-      prevFocusStateRef.current = focusState.focus_state;
 
-      sendMessage({
-        type: 'focus_update',
-        source: 'desktop',
-        timestamp: new Date().toISOString(),
-        payload: {
-          ...focusState,
-          content_changed: result.content_changed,
-          similarity_score: result.similarity_score,
-          analysis_source: result.analysis_source,
-          window_data: focusData.window,
-          activity_data: focusData.activity,
-        },
-      });
-      
-      if (focusState.focus_state === 'distracted') {
-        sendReaction('warning', 'Desktop detected distraction!');
+      // "paused" = user is viewing Pabu Focus itself, skip graph/distraction/reactions
+      if (focusState.focus_state !== 'paused') {
+        addFocusDataPoint(focusState);
+
+        // Detect focus→distracted transition for overlay notification
+        const prevState = prevFocusStateRef.current;
+        if (
+          focusState.focus_state === 'distracted' &&
+          prevState !== 'distracted'
+        ) {
+          setShowDistraction(true);
+          setDistractionResources([]);
+          fetchResources();
+          // Send native macOS notification
+          const api = (window as any).electronAPI;
+          if (api?.sendNotification) {
+            const taskName = taskContextRef.current?.task_name || 'your task';
+            api.sendNotification(
+              'You seem distracted',
+              `Get back to ${taskName}`,
+            );
+          }
+          // Auto-dismiss after 30 seconds
+          setTimeout(() => setShowDistraction(false), 30000);
+        }
+        prevFocusStateRef.current = focusState.focus_state;
+
+        sendMessage({
+          type: 'focus_update',
+          source: 'desktop',
+          timestamp: new Date().toISOString(),
+          payload: {
+            ...focusState,
+            content_changed: result.content_changed,
+            similarity_score: result.similarity_score,
+            analysis_source: result.analysis_source,
+            window_data: focusData.window,
+            activity_data: focusData.activity,
+          },
+        });
+
+        if (focusState.focus_state === 'distracted') {
+          sendReaction('warning', 'Desktop detected distraction!');
+        }
       }
     } catch (error) {
       console.error('Screenshot analysis error:', error);
@@ -413,7 +410,6 @@ const setTaskContext = useCallback((
     autoDetect,
     permissionError,
     sendReaction,
-    sendVoiceEvent,
     startAutoDetection,
     stopAutoDetection,
     clearFocusHistory,

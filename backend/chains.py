@@ -252,12 +252,12 @@ class FocusChains:
                 from langchain_mistralai import ChatMistralAI
 
                 self.vision_llm = ChatMistralAI(
-                    model="pixtral-12b-2409",
+                    model="pixtral-large-latest",
                     mistral_api_key=MISTRAL_API_KEY,
                     temperature=0.3,
                     max_tokens=512,
                 )
-                logger.info("Vision LLM (Pixtral 12B) ready")
+                logger.info("Vision LLM (Pixtral Large) ready")
         except Exception as e:
             logger.warning(f"Vision LLM unavailable: {e}")
             self.vision_llm = None

@@ -170,7 +170,7 @@ async def analyze_image(image_data: dict):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "pixtral-12b-2409",
+                    "model": "pixtral-large-latest",
                     "messages": [
                         {
                             "role": "user",
@@ -810,6 +810,25 @@ async def analyze_smart(data: dict):
             "dino_available": dino_service.is_loaded,
         }
 
+    # Self-app detection: skip LLM when user is looking at Pabu Focus itself
+    SELF_APP_NAMES = {"electron", "pabu focus", "pabu"}
+    if window_data:
+        active_app = window_data.get("app_name", "").strip().lower()
+        if active_app in SELF_APP_NAMES:
+            print(
+                f"[SMART] Active window is self (\"{active_app}\") — skipping analysis (paused)",
+                flush=True,
+            )
+            return {
+                "focus_state": "paused",
+                "confidence": 1.0,
+                "reason": f"User is viewing Pabu Focus app",
+                "content_changed": False,
+                "similarity_score": 0.0,
+                "analysis_source": "self_app",
+                "dino_available": dino_service.is_loaded,
+            }
+
     # Step 1: DINOv3 similarity check (offloaded to thread to avoid blocking)
     dino_result = {"changed": True, "similarity_score": 1.0, "is_first_frame": True}
 
@@ -839,7 +858,7 @@ async def analyze_smart(data: dict):
     similarity_score = dino_result.get("similarity_score", 1.0)
     is_first_frame = dino_result.get("is_first_frame", False)
 
-    # Step 2: If screen unchanged, return cached result
+    # Step 2: If screen unchanged, return cached result (respects TTL)
     if not content_changed and not is_first_frame:
         cached = dino_service.get_cached_focus("desktop")
         if cached:
@@ -855,10 +874,16 @@ async def analyze_smart(data: dict):
                 "analysis_source": "cached",
                 "dino_available": True,
             }
+        else:
+            print(
+                f"[SMART] Screen unchanged but cache expired — forcing fresh LLM analysis...",
+                flush=True,
+            )
 
-    # Step 3: Screen changed (or first frame / no cache) — run full analysis
-    reason_tag = "first frame" if is_first_frame else f"score={similarity_score:.4f}"
-    print(f"[SMART] Screen changed ({reason_tag}) — running LLM analysis...", flush=True)
+    # Step 3: Screen changed (or first frame / no cache / cache expired) — run full analysis
+    if content_changed or is_first_frame:
+        reason_tag = "first frame" if is_first_frame else f"score={similarity_score:.4f}"
+        print(f"[SMART] Screen changed ({reason_tag}) — running LLM analysis...", flush=True)
 
     # 3a: Vision analysis via LangChain (task-aware)
     vision_result = None
@@ -894,7 +919,7 @@ async def analyze_smart(data: dict):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "pixtral-12b-2409",
+                            "model": "pixtral-large-latest",
                             "messages": [{
                                 "role": "user",
                                 "content": [
@@ -1146,7 +1171,7 @@ async def analyze_robot(data: dict):
                             "Content-Type": "application/json",
                         },
                         json={
-                            "model": "pixtral-12b-2409",
+                            "model": "pixtral-large-latest",
                             "messages": [
                                 {
                                     "role": "user",

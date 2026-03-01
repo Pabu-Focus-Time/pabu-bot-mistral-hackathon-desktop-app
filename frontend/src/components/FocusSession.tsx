@@ -206,7 +206,7 @@ const FocusSession: React.FC<FocusSessionProps> = ({
                   color: tokens.colors.text,
                   textTransform: 'capitalize',
                 }}>
-                  {focusState.focus_state === 'unknown' ? 'Analyzing...' : focusState.focus_state}
+                  {focusState.focus_state === 'unknown' ? 'Analyzing...' : focusState.focus_state === 'paused' ? 'Paused' : focusState.focus_state}
                 </span>
                 <span style={{
                   fontSize: tokens.typography.fontSize.sm,

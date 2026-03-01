@@ -121,6 +121,7 @@ export const tokens = {
 export const focusColors = {
   focused: tokens.colors.success,
   distracted: tokens.colors.danger,
+  paused: tokens.colors.textSecondary,
   unknown: tokens.colors.textTertiary,
 };
 
@@ -132,6 +133,7 @@ export const getFocusBg = (state: string) => {
   switch (state) {
     case 'focused': return tokens.colors.successMuted;
     case 'distracted': return tokens.colors.dangerMuted;
+    case 'paused': return tokens.colors.surfaceSecondary;
     default: return tokens.colors.surfaceSecondary;
   }
 };
