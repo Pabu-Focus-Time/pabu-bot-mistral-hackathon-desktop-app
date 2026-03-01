@@ -1,11 +1,35 @@
 import argparse
 import ctypes
 import time
+import sys
+import subprocess
 
 
 def show_msgbox(text: str):
-    # MB_SYSTEMMODAL = 0x1000
-    ctypes.windll.user32.MessageBoxW(0, text, "DINO trigger", 0x00001000)
+    if sys.platform == "win32":
+        # MB_SYSTEMMODAL = 0x1000
+        ctypes.windll.user32.MessageBoxW(0, text, "DINO trigger", 0x00001000)
+    else:
+        # Non-Windows: fallback to printing (use banner/notify for UI)
+        print(text, flush=True)
+
+
+def show_notify_macos(text: str):
+    """
+    macOS notification via AppleScript (best-effort).
+    """
+    if sys.platform != "darwin":
+        print(text, flush=True)
+        return
+    try:
+        subprocess.run(
+            ["osascript", "-e", f'display notification "{text}" with title "DINO trigger"'],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        print(text, flush=True)
 
 
 def show_banner(text: str, seconds: float):
@@ -43,10 +67,12 @@ def main():
     p = argparse.ArgumentParser(description="Simple trigger popup/banner (no model/screen work).")
     p.add_argument("--text", type=str, default="trigger smth", help="Text to display")
     p.add_argument("--seconds", type=float, default=2.0, help="Banner duration (banner mode)")
-    p.add_argument("--mode", type=str, default="banner", choices=["banner", "msgbox"], help="Popup mode")
+    p.add_argument("--mode", type=str, default="banner", choices=["banner", "msgbox", "notify"], help="Popup mode")
     args = p.parse_args()
 
-    if args.mode == "msgbox":
+    if args.mode == "notify":
+        show_notify_macos(args.text)
+    elif args.mode == "msgbox":
         show_msgbox(args.text)
     else:
         show_banner(args.text, seconds=args.seconds)

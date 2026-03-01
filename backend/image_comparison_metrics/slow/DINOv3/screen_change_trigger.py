@@ -47,7 +47,12 @@ ALARM_SECONDS = float(os.environ.get("DINO_TRIGGER_SECONDS", "2.0"))
 
 
 # ---------------- Model ----------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = torch.device("mps")  # Apple Silicon
+else:
+    device = torch.device("cpu")
 trust = bool(str(MODEL_ID).startswith("facebook/dinov3")) or os.path.isdir(str(MODEL_ID))
 if HF_TOKEN:
     try:
@@ -261,6 +266,7 @@ def main():
             if above >= max(1, CONSEC) and (now - last_trigger_ts) >= COOLDOWN_SEC:
                 last_trigger_ts = now
                 above = 0
+                # AT THE MOMENT HERE IT JUST SPAWNS THE ALARM SCRIPT, BUT YOU CAN TRIGGER WHATEVER YOU WANT
                 spawn_alarm(change)
 
             plot = render_plot(history, PLOT_W, PLOT_H, ymax=PLOT_YMAX)
