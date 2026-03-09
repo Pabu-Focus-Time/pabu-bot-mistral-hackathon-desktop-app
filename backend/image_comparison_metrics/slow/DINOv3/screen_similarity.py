@@ -97,7 +97,6 @@ change_hist_pixel = []
 change_hist_dino = []
 change_hist_dino_col = []
 PLOT_YMAX = float(os.environ.get("DINO_PLOT_YMAX", "0.4"))
-PLOT_TITLE_SCALE = float(os.environ.get("DINO_PLOT_TITLE_SCALE", "0.65"))
 PLOT_LEGEND_SCALE = float(os.environ.get("DINO_PLOT_LEGEND_SCALE", "0.5"))
 PLOT_FOOTER_SCALE = float(os.environ.get("DINO_PLOT_FOOTER_SCALE", "0.5"))
 
@@ -172,15 +171,17 @@ def render_change_plot(h_pixel, h_dino, h_dino_col, size_wh):
     W, H = int(size_wh[0]), int(size_wh[1])
     img = np.zeros((H, W, 3), dtype=np.uint8)
 
-    # Background + title
-    cv2.putText(img, "Change over time", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, PLOT_TITLE_SCALE, (255, 255, 255), 2, cv2.LINE_AA)
-
     # Plot area
     x0, y0 = 10, 45
     x1, y1 = W - 10, H - 20
     if x1 <= x0 + 10 or y1 <= y0 + 10:
         return img
     cv2.rectangle(img, (x0, y0), (x1, y1), (120, 120, 120), 1)
+    legend_y_offset = {
+        "pixel": 20,
+        "dino": 42,
+        "dino_col": 64,
+    }
 
     def _plot(series, color, label, y_scale_max=1.0):
         vals = [v for v in series if np.isfinite(v)]
@@ -202,7 +203,7 @@ def render_change_plot(h_pixel, h_dino, h_dino_col, size_wh):
         if len(pts) >= 2:
             cv2.polylines(img, [np.array(pts, dtype=np.int32)], False, color, 2)
         # Legend entry
-        cv2.putText(img, label, (x0 + 8, y0 + 20 if label.endswith("pixel") else y0 + 42),
+        cv2.putText(img, label, (x0 + 8, y0 + legend_y_offset.get(label, 20)),
                     cv2.FONT_HERSHEY_SIMPLEX, PLOT_LEGEND_SCALE, color, 2, cv2.LINE_AA)
 
     # Pixel change is naturally [0,1]
@@ -252,7 +253,7 @@ window_initialized = False
 # Screen capture settings (primary monitor by default)
 MONITOR_INDEX = int(os.environ.get("DINO_SCREEN_MONITOR", "1"))
 # Downscale factor for processing (e.g. 0.5 = half-res). Use 1.0 for native.
-SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.1"))
+SCREEN_SCALE = float(os.environ.get("DINO_SCREEN_SCALE", "0.5"))
 
 pca_model = None
 first_frame_pca_fitted = False
@@ -388,7 +389,7 @@ with mss.mss() as sct:
         pca_title     = add_title(pca_img, "PCA Visualization")
         black_title   = add_title(np.zeros_like(frame_proc), "Empty")
         change_plot = render_change_plot(change_hist_pixel, change_hist_dino, change_hist_dino_col, (Wc, Hc))
-        change_title = add_title(change_plot, "Change (pixel & DINO)")
+        change_title = add_title(change_plot, "Change (pixel & DINO_vanilla & DINO_col)")
 
         # --- 3x2 grid ---
         row1 = np.concatenate([frame_title, blended_title], axis=1)
