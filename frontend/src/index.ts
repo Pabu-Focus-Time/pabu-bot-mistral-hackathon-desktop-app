@@ -122,17 +122,34 @@ ipcMain.handle('send-notification', async (_event, title: string, body: string) 
 // IPC handler: enter focus-block mode (fullscreen + always-on-top to block the user)
 ipcMain.handle('enter-focus-block', async () => {
   if (!mainWindow) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
-  mainWindow.setSimpleFullScreen(true);
+  if (process.platform === 'darwin') {
+    mainWindow.setSimpleFullScreen(true);
+  } else {
+    mainWindow.setFullScreen(true);
+  }
   mainWindow.setClosable(false);
   mainWindow.setMinimizable(false);
+  mainWindow.moveTop();
+  app.focus();
   mainWindow.focus();
 });
 
 // IPC handler: exit focus-block mode (restore normal window)
 ipcMain.handle('exit-focus-block', async () => {
   if (!mainWindow) return;
-  mainWindow.setSimpleFullScreen(false);
+  if (process.platform === 'darwin') {
+    mainWindow.setSimpleFullScreen(false);
+  } else {
+    mainWindow.setFullScreen(false);
+  }
   mainWindow.setAlwaysOnTop(false);
   mainWindow.setClosable(true);
   mainWindow.setMinimizable(true);
