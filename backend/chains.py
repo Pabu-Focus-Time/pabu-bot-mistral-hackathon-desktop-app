@@ -23,7 +23,26 @@ logger = logging.getLogger(__name__)
 
 # -- Configuration ---
 
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "GkJlvmrgptESTkEGdgKjvQziz8aAWvCq")
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    pass
+
+FOCUS_LLM_PROVIDER = os.getenv("FOCUS_LLM_PROVIDER", "mistral").strip().lower()
+
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+
+FOCUS_VISION_MODEL_MISTRAL = os.getenv("FOCUS_VISION_MODEL_MISTRAL", "pixtral-large-latest")
+FOCUS_VISION_MODEL_GEMINI = os.getenv("FOCUS_VISION_MODEL_GEMINI", "gemini-2.5-flash")
+
+FOCUS_SYNTHESIS_MODEL_MISTRAL = os.getenv("FOCUS_SYNTHESIS_MODEL_MISTRAL", "mistral-small-latest")
+FOCUS_SYNTHESIS_MODEL_GEMINI = os.getenv("FOCUS_SYNTHESIS_MODEL_GEMINI", "gemini-2.5-flash")
+
+# Synthesis primary can remain Bedrock, with provider-based fallback.
+FOCUS_SYNTHESIS_PRIMARY = os.getenv("FOCUS_SYNTHESIS_PRIMARY", "bedrock").strip().lower()
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-west-2")
 
 
@@ -206,37 +225,51 @@ class FocusChains:
             ("human", "{input}"),
         ])
 
-        # Primary: AWS Bedrock with Mistral Large
-        try:
-            from langchain_aws import ChatBedrockConverse
+        # Primary: AWS Bedrock (optional) or provider
+        self.synthesis_chain = None
+        if FOCUS_SYNTHESIS_PRIMARY == "bedrock":
+            try:
+                import boto3
+                from langchain_aws import ChatBedrockConverse
 
-            bedrock_llm = ChatBedrockConverse(
-                model="mistral.mistral-large-2407-v1:0",
-                region_name=BEDROCK_REGION,
-                temperature=0.3,
-                max_tokens=512,
-            )
-            self.synthesis_chain = prompt | bedrock_llm | parser
-            logger.info("Bedrock synthesis chain ready")
-        except Exception as e:
-            logger.warning(f"Bedrock synthesis chain unavailable: {e}")
-            self.synthesis_chain = None
+                if boto3.Session().get_credentials() is None:
+                    raise RuntimeError("AWS credentials not configured")
 
-        # Fallback: Mistral API direct
-        try:
-            if MISTRAL_API_KEY:
-                from langchain_mistralai import ChatMistralAI
-
-                mistral_llm = ChatMistralAI(
-                    model="mistral-small-latest",
-                    mistral_api_key=MISTRAL_API_KEY,
+                bedrock_llm = ChatBedrockConverse(
+                    model=os.getenv("BEDROCK_MODEL_ID", "mistral.mistral-large-2407-v1:0"),
+                    region_name=BEDROCK_REGION,
                     temperature=0.3,
                     max_tokens=512,
                 )
-                self.synthesis_chain_fallback = prompt | mistral_llm | parser
-                logger.info("Mistral synthesis chain fallback ready")
+                self.synthesis_chain = prompt | bedrock_llm | parser
+                logger.info("Bedrock synthesis chain ready")
+            except Exception as e:
+                logger.warning(f"Bedrock synthesis chain unavailable: {e}")
+                self.synthesis_chain = None
+        elif FOCUS_SYNTHESIS_PRIMARY in {"mistral", "gemini"}:
+            # Force provider for primary if requested
+            try:
+                llm = self._build_provider_llm(kind="synthesis", provider=FOCUS_SYNTHESIS_PRIMARY)
+                if llm:
+                    self.synthesis_chain = prompt | llm | parser
+                    logger.info(f"{FOCUS_SYNTHESIS_PRIMARY} synthesis chain ready (primary)")
+            except Exception as e:
+                logger.warning(f"{FOCUS_SYNTHESIS_PRIMARY} synthesis chain unavailable: {e}")
+                self.synthesis_chain = None
+        else:
+            logger.warning(
+                f"Unknown FOCUS_SYNTHESIS_PRIMARY='{FOCUS_SYNTHESIS_PRIMARY}', falling back to provider only"
+            )
+
+        # Fallback: provider (mistral or gemini)
+        self.synthesis_chain_fallback = None
+        try:
+            llm = self._build_provider_llm(kind="synthesis", provider=FOCUS_LLM_PROVIDER)
+            if llm:
+                self.synthesis_chain_fallback = prompt | llm | parser
+                logger.info(f"{FOCUS_LLM_PROVIDER} synthesis chain fallback ready")
         except Exception as e:
-            logger.warning(f"Mistral synthesis chain unavailable: {e}")
+            logger.warning(f"{FOCUS_LLM_PROVIDER} synthesis chain unavailable: {e}")
             self.synthesis_chain_fallback = None
 
         # Wire up with_fallbacks if both are available
@@ -248,19 +281,58 @@ class FocusChains:
     def _init_vision_llm(self) -> None:
         """Initialize the Pixtral vision model via LangChain."""
         try:
-            if MISTRAL_API_KEY:
-                from langchain_mistralai import ChatMistralAI
-
-                self.vision_llm = ChatMistralAI(
-                    model="pixtral-large-latest",
-                    mistral_api_key=MISTRAL_API_KEY,
-                    temperature=0.3,
-                    max_tokens=512,
-                )
-                logger.info("Vision LLM (Pixtral Large) ready")
+            self.vision_llm = self._build_provider_llm(kind="vision", provider=FOCUS_LLM_PROVIDER)
+            if self.vision_llm:
+                logger.info(f"Vision LLM ready (provider={FOCUS_LLM_PROVIDER})")
         except Exception as e:
             logger.warning(f"Vision LLM unavailable: {e}")
             self.vision_llm = None
+
+    @staticmethod
+    def _build_provider_llm(kind: str, provider: str):
+        """
+        Create a LangChain chat model instance for the given provider.
+
+        kind: "vision" or "synthesis"
+        provider: "mistral" or "gemini"
+        """
+        provider = (provider or "").strip().lower()
+        kind = (kind or "").strip().lower()
+
+        if provider == "mistral":
+            if not MISTRAL_API_KEY:
+                logger.warning("MISTRAL_API_KEY not set; Mistral provider unavailable")
+                return None
+            from langchain_mistralai import ChatMistralAI
+
+            model = FOCUS_VISION_MODEL_MISTRAL if kind == "vision" else FOCUS_SYNTHESIS_MODEL_MISTRAL
+            return ChatMistralAI(
+                model=model,
+                mistral_api_key=MISTRAL_API_KEY,
+                temperature=0.3,
+                max_tokens=512,
+            )
+
+        if provider == "gemini":
+            if not GOOGLE_API_KEY:
+                logger.warning("GOOGLE_API_KEY not set; Gemini provider unavailable")
+                return None
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+            except Exception as e:
+                logger.warning(f"langchain-google-genai not installed/available: {e}")
+                return None
+
+            model = FOCUS_VISION_MODEL_GEMINI if kind == "vision" else FOCUS_SYNTHESIS_MODEL_GEMINI
+            # Note: ChatGoogleGenerativeAI also reads GOOGLE_API_KEY from env by default.
+            return ChatGoogleGenerativeAI(
+                model=model,
+                google_api_key=GOOGLE_API_KEY,
+                temperature=0.3,
+            )
+
+        logger.warning(f"Unknown provider '{provider}' (kind={kind})")
+        return None
 
     @property
     def is_ready(self) -> bool:
