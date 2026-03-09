@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { captureAndAnalyzeSmart, SmartAnalysisResult } from './screenshot';
-import { startDataCollection, stopDataCollection, collectFocusData, WindowData, ActivityData } from './dataCollector';
+import { captureAndAnalyzeSmart } from './screenshot';
+import { startDataCollection, stopDataCollection, collectFocusData } from './dataCollector';
 
 export interface FocusState {
   focus_state: 'focused' | 'distracted' | 'unknown' | 'paused';
@@ -33,7 +33,7 @@ export interface WebSocketMessage {
 
 const WS_URL = 'ws://127.0.0.1:9800/ws/desktop';
 const API_BASE = 'http://127.0.0.1:9800';
-const SCREENSHOT_INTERVAL = 5000; // 1 second
+const SCREENSHOT_INTERVAL = 7000; // 3 seconds
 
 export function useFocusDetection() {
   const [isConnected, setIsConnected] = useState(false);
@@ -67,7 +67,7 @@ export function useFocusDetection() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const sessionStartRef = useRef<number | null>(null);
-  const prevFocusStateRef = useRef<string>('unknown');
+  const skipNextDistractedTriggerRef = useRef<boolean>(false);
   const taskContextRef = useRef<{
     task_name: string;
     task_description: string;
@@ -192,15 +192,6 @@ export function useFocusDetection() {
     }
   }, []);
 
-  const sendFocusUpdate = useCallback((focusState: FocusState) => {
-    sendMessage({
-      type: 'focus_update',
-      source: 'desktop',
-      timestamp: new Date().toISOString(),
-      payload: focusState,
-    });
-  }, [sendMessage]);
-
   const sendReaction = useCallback((reaction: string, text?: string) => {
     sendMessage({
       type: 'reaction',
@@ -267,8 +258,8 @@ const setTaskContext = useCallback((
     setShowDistraction(false);
     setDistractionResources([]);
     setIsLoadingResources(false);
-    // Allow re-triggering the blocker if the user remains distracted.
-    prevFocusStateRef.current = 'unknown';
+    // Prevent immediate re-open from one in-flight/stale distracted response.
+    skipNextDistractedTriggerRef.current = true;
     // Exit focus-block mode: restore normal window
     const api = (window as any).electronAPI;
     if (api?.exitFocusBlock) {
@@ -278,6 +269,18 @@ const setTaskContext = useCallback((
 
   const analyzeScreenshot = useCallback(async () => {
     if (isAnalyzing) return;
+    // Avoid self-feedback loop: when blocker overlay is visible, the app would
+    // screenshot its own "You're off track" UI and keep re-labeling as distracted.
+    if (showDistraction) {
+      setDesktopFocus({
+        focus_state: 'paused',
+        confidence: 1,
+        reason: 'focus_block_overlay_active',
+        timestamp: new Date().toISOString(),
+        source: 'desktop',
+      });
+      return;
+    }
     
     setIsAnalyzing(true);
     setPermissionError(null);
@@ -334,6 +337,21 @@ const setTaskContext = useCallback((
         timestamp: new Date().toISOString(),
         source: 'desktop',
       };
+
+      const reasonText = String(result.reason || '').toLowerCase();
+      const selfUiReason =
+        reasonText.includes("you're off track") ||
+        reasonText.includes("you are off track") ||
+        reasonText.includes("off track") ||
+        reasonText.includes('pabu focus') ||
+        reasonText.includes('focus session');
+
+      // Ignore classifications that are clearly describing this app's own blocker UI.
+      if (selfUiReason) {
+        focusState.focus_state = 'unknown';
+        focusState.confidence = 0;
+        focusState.reason = 'ignored_pabu_ui_content';
+      }
       
       setDesktopFocus(focusState);
 
@@ -341,31 +359,30 @@ const setTaskContext = useCallback((
       if (focusState.focus_state !== 'paused') {
         addFocusDataPoint(focusState);
 
-        // Detect focus→distracted transition for overlay notification
-        const prevState = prevFocusStateRef.current;
-        if (
-          focusState.focus_state === 'distracted' &&
-          prevState !== 'distracted'
-        ) {
-          setShowDistraction(true);
-          setDistractionResources([]);
-          fetchResources();
-          // Enter focus-block mode: fullscreen + always-on-top
-          const api = (window as any).electronAPI;
-          if (api?.enterFocusBlock) {
-            api.enterFocusBlock();
-          }
-          // Also send native notification as fallback
-          if (api?.sendNotification) {
-            const taskName = taskContextRef.current?.task_name || 'your task';
-            api.sendNotification(
-              'You seem distracted',
-              `Get back to ${taskName}`,
-            );
+        // Trigger blocker whenever distraction is detected. We only skip once
+        // right after dismiss to absorb a stale in-flight response.
+        if (focusState.focus_state === 'distracted') {
+          if (skipNextDistractedTriggerRef.current) {
+            skipNextDistractedTriggerRef.current = false;
+          } else {
+            setShowDistraction(true);
+            setDistractionResources([]);
+            fetchResources();
+            // Enter focus-block mode: fullscreen + always-on-top
+            const api = (window as any).electronAPI;
+            if (api?.enterFocusBlock) {
+              api.enterFocusBlock();
+            }
+            // Also send native notification as fallback
+            if (api?.sendNotification) {
+              const taskName = taskContextRef.current?.task_name || 'your task';
+              api.sendNotification(
+                'You seem distracted',
+                `Get back to ${taskName}`,
+              );
+            }
           }
         }
-        prevFocusStateRef.current = focusState.focus_state;
-
         sendMessage({
           type: 'focus_update',
           source: 'desktop',
@@ -397,7 +414,7 @@ const setTaskContext = useCallback((
     } finally {
       setIsAnalyzing(false);
     }
-  }, [isAnalyzing, sendFocusUpdate, sendReaction, sendMessage, addFocusDataPoint, fetchResources]);
+  }, [isAnalyzing, showDistraction, sendReaction, sendMessage, addFocusDataPoint, fetchResources]);
 
   const startAutoDetection = useCallback(() => {
     if (screenshotInterval) return;
