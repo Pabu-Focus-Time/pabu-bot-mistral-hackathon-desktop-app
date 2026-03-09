@@ -41,6 +41,12 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 # AWS Bedrock Configuration
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-west-2")
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "mistral.mistral-large-2407-v1:0")
+BEDROCK_ENABLED = os.getenv("BEDROCK_ENABLED", "true").strip().lower() == "true"
+
+try:
+    _bedrock_credentials_available = boto3.Session().get_credentials() is not None
+except Exception:
+    _bedrock_credentials_available = False
 
 # Active WebSocket connections
 desktop_connections: list[WebSocket] = []
@@ -517,6 +523,9 @@ class GenerateTodosRequest(BaseModel):
 
 async def call_bedrock_mistral(prompt: str, system_prompt: str) -> Optional[dict]:
     """Call Mistral Large via AWS Bedrock using boto3."""
+    if not BEDROCK_ENABLED or not _bedrock_credentials_available:
+        return None
+
     try:
         bedrock_client = boto3.client(
             "bedrock-runtime",
