@@ -17,7 +17,7 @@ from typing import Optional, List
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,11 @@ def _build_vision_prompt(task_context: Optional[dict] = None) -> str:
             "IMPORTANT: Determine if the screen content is RELEVANT to this specific task. "
             "A code editor is NOT relevant if the task is about math/science/writing. "
             "A YouTube video IS relevant if it's a lecture on the task topic."
+        )
+        parts.append(
+            "IMPORTANT: If the app's own coaching UI appears (e.g., 'You're off track', "
+            "'Pabu Focus', focus-session dashboard), treat it as SYSTEM UI and DO NOT classify "
+            "that as a distraction signal by itself. Focus on the actual study/work content."
         )
     else:
         parts = [
