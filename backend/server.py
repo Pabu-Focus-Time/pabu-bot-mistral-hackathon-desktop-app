@@ -17,6 +17,14 @@ import io
 import base64
 import boto3
 import logging
+import re
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    pass
 
 from dino_service import DinoService
 from chains import FocusChains
@@ -25,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 PORT = int(os.getenv("PORT", "9800"))
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "GkJlvmrgptESTkEGdgKjvQziz8aAWvCq")
+FOCUS_LLM_PROVIDER = os.getenv("FOCUS_LLM_PROVIDER", "mistral").strip().lower()
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 
 # AWS Bedrock Configuration
@@ -39,6 +49,105 @@ robot_connections: list[WebSocket] = []
 # Singletons (initialized in lifespan)
 dino_service = DinoService()
 focus_chains = FocusChains()
+
+def _extract_json_object(text: str) -> Optional[dict]:
+    """Best-effort JSON object extraction from model output."""
+    if not text:
+        return None
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # JSON fenced block
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except Exception:
+            pass
+
+    # First {...} object
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+
+    return None
+
+
+async def _call_mistral_vision(image_bytes: bytes, prompt: str, mime_type: str) -> Optional[dict]:
+    """Direct Mistral Pixtral call (vision) returning parsed JSON."""
+    if not MISTRAL_API_KEY:
+        return None
+
+    image_b64 = base64.b64encode(image_bytes).decode()
+    # Mistral expects an image_url with a valid mime type. Use png for screenshots, jpeg for robot frames.
+    image_url = f"data:{mime_type};base64,{image_b64}"
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "pixtral-large-latest",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            timeout=60.0,
+        )
+        if response.status_code != 200:
+            logger.warning(f"Mistral vision HTTP error: {response.status_code}")
+            return None
+
+        result = response.json()
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return _extract_json_object(content)
+
+
+def _call_gemini_vision_sync(image_bytes: bytes, prompt: str) -> Optional[dict]:
+    """
+    Direct Gemini call (vision) returning parsed JSON.
+    Runs in a thread via asyncio.to_thread().
+    """
+    if not GOOGLE_API_KEY:
+        return None
+    try:
+        import google.generativeai as genai
+    except Exception as e:
+        logger.warning(f"google-generativeai not installed/available: {e}")
+        return None
+
+    genai.configure(api_key=GOOGLE_API_KEY)
+    model_name = os.getenv("FOCUS_VISION_MODEL_GEMINI", "gemini-2.5-flash")
+    model = genai.GenerativeModel(model_name)
+
+    img = Image.open(io.BytesIO(image_bytes))
+    response = model.generate_content([prompt, img])
+    text = getattr(response, "text", "") or ""
+    return _extract_json_object(text)
+
+
+async def _call_provider_vision(image_bytes: bytes, prompt: str, mime_type: str) -> Optional[dict]:
+    """Provider-switched vision call used for fallbacks and /api/analyze."""
+    provider = FOCUS_LLM_PROVIDER
+    if provider == "gemini":
+        return await asyncio.to_thread(_call_gemini_vision_sync, image_bytes, prompt)
+    # default mistral
+    return await _call_mistral_vision(image_bytes, prompt, mime_type)
 
 
 @asynccontextmanager
@@ -163,13 +272,7 @@ async def health_check():
 
 @app.post("/api/analyze")
 async def analyze_image(image_data: dict):
-    """Analyze an image for focus state using Mistral"""
-    if not MISTRAL_API_KEY:
-        return {
-            "focus_state": "unknown",
-            "confidence": 0.0,
-            "reason": "MISTRAL_API_KEY not configured",
-        }
+    """Analyze an image for focus state using the configured provider (Mistral or Gemini)."""
 
     # Decode base64 image
     try:
@@ -181,66 +284,28 @@ async def analyze_image(image_data: dict):
             "reason": "Invalid image data",
         }
 
-    # Call Mistral API (vision model)
-    async with httpx.AsyncClient() as client:
-        try:
-            # Encode image as base64 data URL
-            image_b64 = base64.b64encode(image_bytes).decode()
-            image_url = f"data:image/png;base64,{image_b64}"
+    prompt = (
+        'Analyze this screenshot. Is the user focused on productive work or distracted? '
+        'Consider: Are they using productive apps (coding, writing, research) or distracting '
+        'apps (games, social media, YouTube videos)? Respond ONLY with valid JSON: '
+        '{"focus_state": "focused|distracted|unknown", "confidence": 0.0-1.0, "reason": "brief explanation"}'
+    )
 
-            response = await client.post(
-                "https://api.mistral.ai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {MISTRAL_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "pixtral-large-latest",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": image_url}},
-                                {
-                                    "type": "text",
-                                    "text": 'Analyze this screenshot. Is the user focused on productive work or distracted? Consider: Are they using productive apps (coding, writing, research) or distracting apps (games, social media, YouTube videos)? Respond ONLY with valid JSON: {"focus_state": "focused|distracted|unknown", "confidence": 0.0-1.0, "reason": "brief explanation"}',
-                                },
-                            ],
-                        }
-                    ],
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=60.0,
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                content = (
-                    result.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "{}")
-                )
-                try:
-                    return json.loads(content)
-                except:
-                    return {
-                        "focus_state": "unknown",
-                        "confidence": 0.0,
-                        "reason": "Failed to parse response",
-                    }
-            else:
-                return {
-                    "focus_state": "unknown",
-                    "confidence": 0.0,
-                    "reason": f"API error: {response.status_code}",
-                }
-
-        except Exception as e:
-            return {
-                "focus_state": "unknown",
-                "confidence": 0.0,
-                "reason": f"Error: {str(e)}",
-            }
+    try:
+        result = await _call_provider_vision(image_bytes, prompt, "image/png")
+        if result and isinstance(result, dict) and "focus_state" in result:
+            return result
+        return {
+            "focus_state": "unknown",
+            "confidence": 0.0,
+            "reason": f"{FOCUS_LLM_PROVIDER} vision unavailable or returned non-JSON",
+        }
+    except Exception as e:
+        return {
+            "focus_state": "unknown",
+            "confidence": 0.0,
+            "reason": f"Error: {str(e)}",
+        }
 
 
 @app.post("/api/tts")
@@ -337,51 +402,27 @@ async def analyze_multi_agent(data: dict):
         if current_todo:
             context_parts.append(f"Working on: {current_todo}")
     
-    # If we have Mistral, do a synthesis
-    if MISTRAL_API_KEY:
-        async with httpx.AsyncClient() as client:
-            try:
-                prompt = f"""Analyze the user's focus state based on these signals:
-{chr(10).join(f"- {p}" for p in context_parts)}
-
-Considering ALL signals above, determine if the user is:
-- "focused": Actively working on the task
-- "distracted": Not working on the task (browsing, social media, etc.)
-- "unknown": Cannot determine
-
-Respond with ONLY a JSON object: {{"focus_state": "focused|distracted|unknown", "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
-
-                response = await client.post(
-                    "https://api.mistral.ai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {MISTRAL_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": "mistral-small-latest",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "response_format": {"type": "json_object"},
-                    },
-                    timeout=10.0,
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-                    try:
-                        synthesis = json.loads(content)
-                        return {
-                            "focus_state": synthesis.get("focus_state", "unknown"),
-                            "confidence": synthesis.get("confidence", 0),
-                            "reason": synthesis.get("reason", ""),
-                            "vision_analysis": vision_analysis,
-                            "window_data": window_data,
-                            "activity_data": activity_data,
-                        }
-                    except:
-                        pass
-            except Exception as e:
-                print(f"Multi-agent synthesis error: {e}")
+    # Prefer LangChain synthesis (supports provider switching via backend/chains.py)
+    if focus_chains.is_ready:
+        try:
+            synthesis = await focus_chains.synthesize_focus(
+                vision_analysis=vision_analysis,
+                window_data=window_data,
+                activity_data=activity_data,
+                task_context=task_context,
+                content_change=None,
+            )
+            if synthesis and isinstance(synthesis, dict) and "focus_state" in synthesis:
+                return {
+                    "focus_state": synthesis.get("focus_state", "unknown"),
+                    "confidence": synthesis.get("confidence", 0),
+                    "reason": synthesis.get("reason", ""),
+                    "vision_analysis": vision_analysis,
+                    "window_data": window_data,
+                    "activity_data": activity_data,
+                }
+        except Exception as e:
+            print(f"Multi-agent synthesis error: {e}")
     
     # Fallback: simple heuristic
     focus_state = "unknown"
@@ -927,58 +968,26 @@ async def analyze_smart(data: dict):
 
     # Fallback to original /api/analyze logic if LangChain vision failed
     if vision_result is None or vision_result.get("focus_state") == "unknown":
-        if MISTRAL_API_KEY:
-            try:
-                print("[VISION] Falling back to direct Mistral API...", flush=True)
+        try:
+            print(f"[VISION] Falling back to direct provider ({FOCUS_LLM_PROVIDER})...", flush=True)
 
-                # Build task-aware vision prompt for fallback too
-                from chains import _build_vision_prompt
-                fallback_vision_prompt = _build_vision_prompt(task_context)
+            # Build task-aware vision prompt for fallback too
+            from chains import _build_vision_prompt
+            fallback_vision_prompt = _build_vision_prompt(task_context)
 
-                async with httpx.AsyncClient() as client:
-                    image_url = f"data:image/png;base64,{image_b64}"
-                    response = await client.post(
-                        "https://api.mistral.ai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {MISTRAL_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": "pixtral-large-latest",
-                            "messages": [{
-                                "role": "user",
-                                "content": [
-                                    {"type": "image_url", "image_url": {"url": image_url}},
-                                    {
-                                        "type": "text",
-                                        "text": fallback_vision_prompt,
-                                    },
-                                ],
-                            }],
-                            "response_format": {"type": "json_object"},
-                        },
-                        timeout=60.0,
-                    )
-
-                    if response.status_code == 200:
-                        result = response.json()
-                        content = (
-                            result.get("choices", [{}])[0]
-                            .get("message", {})
-                            .get("content", "{}")
-                        )
-                        vision_result = json.loads(content)
-                        print(
-                            f"[VISION] Direct Mistral result: "
-                            f"{vision_result.get('focus_state')} "
-                            f"({vision_result.get('confidence', 0)*100:.0f}%) "
-                            f"— {vision_result.get('reason', '')[:60]}",
-                            flush=True,
-                        )
-                    else:
-                        print(f"[VISION] Direct Mistral HTTP error: {response.status_code}", flush=True)
-            except Exception as e:
-                print(f"[VISION] Direct Mistral fallback failed: {e}", flush=True)
+            image_bytes = base64.b64decode(image_b64)
+            direct = await _call_provider_vision(image_bytes, fallback_vision_prompt, "image/png")
+            if direct:
+                vision_result = direct
+                print(
+                    f"[VISION] Direct provider result: "
+                    f"{vision_result.get('focus_state')} "
+                    f"({vision_result.get('confidence', 0)*100:.0f}%) "
+                    f"— {vision_result.get('reason', '')[:60]}",
+                    flush=True,
+                )
+        except Exception as e:
+            print(f"[VISION] Direct provider fallback failed: {e}", flush=True)
 
     # 3b: Synthesis — combine all signals
     analysis_source = "llm"
@@ -1179,70 +1188,29 @@ async def analyze_robot(data: dict):
 
     # 3b: Fallback to direct Mistral API if LangChain failed
     if vision_result is None or vision_result.get("focus_state") == "unknown":
-        if MISTRAL_API_KEY:
-            try:
+        try:
+            print(
+                f"[ROBOT-VISION] Falling back to direct provider ({FOCUS_LLM_PROVIDER})...",
+                flush=True,
+            )
+            from chains import ROBOT_VISION_PROMPT
+
+            image_bytes = base64.b64decode(image_b64)
+            direct = await _call_provider_vision(image_bytes, ROBOT_VISION_PROMPT, "image/jpeg")
+            if direct:
+                vision_result = direct
                 print(
-                    "[ROBOT-VISION] Falling back to direct Mistral API...",
+                    f"[ROBOT-VISION] Direct provider result: "
+                    f"{vision_result.get('focus_state')} "
+                    f"({vision_result.get('confidence', 0)*100:.0f}%) "
+                    f"— {vision_result.get('reason', '')[:80]}",
                     flush=True,
                 )
-                from chains import ROBOT_VISION_PROMPT
-
-                async with httpx.AsyncClient() as client:
-                    image_url = f"data:image/jpeg;base64,{image_b64}"
-                    response = await client.post(
-                        "https://api.mistral.ai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {MISTRAL_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": "pixtral-large-latest",
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "image_url",
-                                            "image_url": {"url": image_url},
-                                        },
-                                        {
-                                            "type": "text",
-                                            "text": ROBOT_VISION_PROMPT,
-                                        },
-                                    ],
-                                }
-                            ],
-                            "response_format": {"type": "json_object"},
-                        },
-                        timeout=60.0,
-                    )
-
-                    if response.status_code == 200:
-                        result = response.json()
-                        content = (
-                            result.get("choices", [{}])[0]
-                            .get("message", {})
-                            .get("content", "{}")
-                        )
-                        vision_result = json.loads(content)
-                        print(
-                            f"[ROBOT-VISION] Direct Mistral result: "
-                            f"{vision_result.get('focus_state')} "
-                            f"({vision_result.get('confidence', 0)*100:.0f}%) "
-                            f"— {vision_result.get('reason', '')[:80]}",
-                            flush=True,
-                        )
-                    else:
-                        print(
-                            f"[ROBOT-VISION] Direct Mistral HTTP error: "
-                            f"{response.status_code}",
-                            flush=True,
-                        )
-            except Exception as e:
-                print(
-                    f"[ROBOT-VISION] Direct Mistral fallback failed: {e}",
-                    flush=True,
-                )
+        except Exception as e:
+            print(
+                f"[ROBOT-VISION] Direct provider fallback failed: {e}",
+                flush=True,
+            )
 
     # Step 4: Build final result
     if vision_result and vision_result.get("focus_state") != "unknown":
