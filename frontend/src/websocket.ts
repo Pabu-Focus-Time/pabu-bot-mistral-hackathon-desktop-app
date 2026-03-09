@@ -33,7 +33,7 @@ export interface WebSocketMessage {
 
 const WS_URL = 'ws://127.0.0.1:9800/ws/desktop';
 const API_BASE = 'http://127.0.0.1:9800';
-const SCREENSHOT_INTERVAL = 1000; // 1 second
+const SCREENSHOT_INTERVAL = 5000; // 1 second
 
 export function useFocusDetection() {
   const [isConnected, setIsConnected] = useState(false);
@@ -267,6 +267,8 @@ const setTaskContext = useCallback((
     setShowDistraction(false);
     setDistractionResources([]);
     setIsLoadingResources(false);
+    // Allow re-triggering the blocker if the user remains distracted.
+    prevFocusStateRef.current = 'unknown';
     // Exit focus-block mode: restore normal window
     const api = (window as any).electronAPI;
     if (api?.exitFocusBlock) {
